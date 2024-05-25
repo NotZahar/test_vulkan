@@ -12,18 +12,38 @@ add_executable(${PROJECT_NAME})
 target_sources(${PROJECT_NAME}
     PRIVATE
         src/main.cpp
+        src/logger.cpp
+        src/render/renderer.cpp
 )
 
-target_include_directories(${PROJECT_NAME} 
-    PRIVATE 
-        ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/glm
-        ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/GLFW/include)
+target_include_directories(
+    ${PROJECT_NAME}
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/glm
+            ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/GLFW/include
+)
 
-target_link_libraries(${PROJECT_NAME} 
-    PRIVATE 
-        Vulkan::Vulkan 
-	    ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/GLFW/lib/glfw3.lib)
+target_link_libraries(
+    ${PROJECT_NAME}
+        PRIVATE
+            Vulkan::Vulkan
+            ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/GLFW/lib/libglfw3.a
+)
 
 if(CMAKE_COMPILER_IS_GNUCXX)
-    target_compile_options(${PROJECT_NAME} PRIVATE -Wall -Wextra -Werror -pedantic)
+    target_compile_options(
+        ${PROJECT_NAME}
+            PRIVATE
+                -Wall
+                -Wextra
+                -Werror
+                -pedantic
+    )
+else()
+    target_compile_options(
+        ${PROJECT_NAME}
+            PRIVATE
+                /W4
+                /WX
+    )
 endif()
