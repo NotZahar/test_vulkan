@@ -27,8 +27,8 @@ namespace tv {
         bool vExtensionsSupported(const std::vector<const char*>& vulkanExtensions) noexcept;
         bool vLayersSupported(const std::vector<const char*>& vulkanLayers) noexcept;
 
-        static constexpr int _windowWidth = 800;
-        static constexpr int _windowHeight = 600;
+        inline static constexpr int _windowWidth = 800;
+        inline static constexpr int _windowHeight = 600;
 
         void initWindow() noexcept;
 

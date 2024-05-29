@@ -11,6 +11,7 @@
 
 namespace tv {
     namespace {
+#if(TV_DEBUG_MODE)
         VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
             VkDebugUtilsMessageSeverityFlagBitsEXT /* messageSeverity */,
             VkDebugUtilsMessageTypeFlagsEXT /* messageType */,
@@ -19,6 +20,7 @@ namespace tv {
             Logger::instance().err(std::format("{}\n", pCallbackData->pMessage));
             return VK_FALSE;
         }
+#endif
     }
 
     Renderer::Renderer() noexcept
@@ -34,9 +36,11 @@ namespace tv {
     }
 
     Renderer::~Renderer() {
-        glfwDestroyWindow(_mainWindow);
+#if(TV_DEBUG_MODE)
         _vInstance.destroyDebugUtilsMessengerEXT(_vDebugMessenger, nullptr, _vDispatchLoaderDynamic);
+#endif
         _vInstance.destroy();
+        glfwDestroyWindow(_mainWindow);
         glfwTerminate();
     }
 
@@ -85,7 +89,7 @@ namespace tv {
         auto& logger = Logger::instance();
         const std::vector<vk::ExtensionProperties> supportedExtensions = vk::enumerateInstanceExtensionProperties();
 
-#if(DEBUG_MODE)
+#if(TV_DEBUG_MODE)
         std::string supportedExtensionsMessage = std::format("{}:\n", constants::messages::VULKAN_EXTENSIONS);
         for (const vk::ExtensionProperties& supportedExtension : supportedExtensions)
             supportedExtensionsMessage += std::format("    {}\n", supportedExtension.extensionName.data());
@@ -95,7 +99,7 @@ namespace tv {
             if (std::ranges::any_of(supportedExtensions, [vExtension](const vk::ExtensionProperties& supportedExtension) {
                     return std::strcmp(vExtension, supportedExtension.extensionName) == 0;
                 })) {
-#if(DEBUG_MODE)
+#if(TV_DEBUG_MODE)
                 logger.log(std::format("{}: {}\n", constants::messages::VULKAN_EXTENSION_SUPPORTED, vExtension));
 #endif
                 continue;
@@ -112,7 +116,7 @@ namespace tv {
         auto& logger = Logger::instance();
         const std::vector<vk::LayerProperties> supportedLayers = vk::enumerateInstanceLayerProperties();
 
-#if(DEBUG_MODE)
+#if(TV_DEBUG_MODE)
         std::string supportedLayersMessage = std::format("{}:\n", constants::messages::VULKAN_LAYERS);
         for (const vk::LayerProperties& supportedLayer : supportedLayers)
             supportedLayersMessage += std::format("    {}\n", supportedLayer.layerName.data());
@@ -122,7 +126,7 @@ namespace tv {
             if (std::ranges::any_of(supportedLayers, [vLayer](const vk::LayerProperties& supportedLayer) {
                     return std::strcmp(vLayer, supportedLayer.layerName) == 0;
                 })) {
-#if(DEBUG_MODE)
+#if(TV_DEBUG_MODE)
                 logger.log(std::format("{}: {}\n", constants::messages::VULKAN_LAYER_SUPPORTED, vLayer));
 #endif
                 continue;
@@ -147,13 +151,13 @@ namespace tv {
         std::vector<const char*> vulkanExtensions{ rawGlfwExtensions, rawGlfwExtensions + vulkanExtensionCount };
         std::vector<const char*> vulkanLayers{};
 
-#if(DEBUG_MODE)
+#if(TV_DEBUG_MODE)
         vulkanExtensions.emplace_back(constants::config::VULKAN_EXT_DEBUG.c_str());
         vulkanLayers.emplace_back(constants::config::VULKAN_LAYER_VALIDATION.c_str());
         ++vulkanExtensionCount;
-#endif
-        printAdditionalInfo(vulkanVersion, vulkanExtensions);
 
+        printAdditionalInfo(vulkanVersion, vulkanExtensions);
+#endif
         if(!vExtensionsSupported(vulkanExtensions)) {
             logger.err(constants::messages::VULKAN_SOME_EXTENSIONS_NOT_SUPPORTED);
             return nullptr;
@@ -192,7 +196,7 @@ namespace tv {
     }
 
     vk::DebugUtilsMessengerEXT Renderer::makeVDebugMessenger() noexcept {
-#if(DEBUG_MODE)
+#if(TV_DEBUG_MODE)
         vk::DebugUtilsMessengerCreateInfoEXT createInfo{
             vk::DebugUtilsMessengerCreateFlagsEXT(),
             vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose

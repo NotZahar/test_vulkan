@@ -30,7 +30,7 @@ target_link_libraries(
             ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/GLFW/lib/libglfw3.a
 )
 
-add_compile_definitions("DEBUG_MODE=$<CONFIG:Debug>")
+add_compile_definitions("TV_DEBUG_MODE=$<CONFIG:Debug>")
 
 if(CMAKE_COMPILER_IS_GNUCXX)
     target_compile_options(
