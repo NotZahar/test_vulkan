@@ -2,6 +2,8 @@
 
 #include <format>
 #include <algorithm>
+#include <set>
+#include <string>
 #include <cassert>
 #include <cstring>
 
@@ -21,17 +23,28 @@ namespace tv {
             return VK_FALSE;
         }
 #endif
+
+        bool deviceIsSuitable(const vk::PhysicalDevice& device) {
+            const std::vector<const char*> requestedExtensions = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+            std::set<std::string> requiredExtensions{ requestedExtensions.cbegin(), requestedExtensions.cend() };
+            const auto deviceExtensions = device.enumerateDeviceExtensionProperties();
+            for (const vk::ExtensionProperties& deviceExtension : deviceExtensions)
+                requiredExtensions.erase(deviceExtension.extensionName);
+            return requiredExtensions.empty();
+        }
     }
 
     Renderer::Renderer() noexcept
         : _mainWindow{ nullptr },
           _vInstance{ nullptr },
+          _physicalDevice{ nullptr },
           _vDebugMessenger{ nullptr }
     {
         glfwInit();
         _vInstance = makeVInstance();
         _vDispatchLoaderDynamic.init(_vInstance, vkGetInstanceProcAddr);
         _vDebugMessenger = makeVDebugMessenger();
+        _physicalDevice = chooseDevice();
         initWindow();
     }
 
@@ -49,8 +62,8 @@ namespace tv {
         glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 
         _mainWindow = glfwCreateWindow(
-            _windowWidth,
-            _windowHeight,
+            constants::config::WINDOW_MAIN_WIDTH,
+            constants::config::WINDOW_MAIN_HEIGHT,
             constants::config::WINDOW_TITLE.c_str(),
             nullptr,
             nullptr
@@ -67,7 +80,7 @@ namespace tv {
             glfwPollEvents();
     }
 
-    void Renderer::printAdditionalInfo(const uint32_t vulkanVersion, const std::vector<const char*>& vulkanExtensions) noexcept {
+    void Renderer::printAdditionalInfo(const uint32_t vulkanVersion, const std::vector<const char*>& vulkanExtensions) const noexcept {
         const std::string vulkanVersionMessage = std::format(
             "{}: {}.{}.{}\n",
             constants::messages::VULKAN_API_VERSION,
@@ -85,7 +98,7 @@ namespace tv {
         logger.log(requestedExtensionsMessage);
     }
 
-    bool Renderer::vExtensionsSupported(const std::vector<const char*>& vulkanExtensions) noexcept {
+    bool Renderer::vExtensionsSupported(const std::vector<const char*>& vulkanExtensions) const noexcept {
         auto& logger = Logger::instance();
         const std::vector<vk::ExtensionProperties> supportedExtensions = vk::enumerateInstanceExtensionProperties();
 
@@ -112,7 +125,7 @@ namespace tv {
         return true;
     }
 
-    bool Renderer::vLayersSupported(const std::vector<const char*>& vulkanLayers) noexcept {
+    bool Renderer::vLayersSupported(const std::vector<const char*>& vulkanLayers) const noexcept {
         auto& logger = Logger::instance();
         const std::vector<vk::LayerProperties> supportedLayers = vk::enumerateInstanceLayerProperties();
 
@@ -139,7 +152,7 @@ namespace tv {
         return true;
     }
 
-    vk::Instance Renderer::makeVInstance() noexcept {
+    vk::Instance Renderer::makeVInstance() const noexcept {
         assert(glfwVulkanSupported());
         auto& logger = Logger::instance();
 
@@ -188,14 +201,14 @@ namespace tv {
         try {
             return vk::createInstance(createInfo);
         } catch (const vk::SystemError& err) {
-            logger.err(std::format("{}: {}",
+            logger.err(std::format("{}: {}\n",
                 constants::messages::VULKAN_INSTANCE_CREATION_FAILED,
                 err.what()));
             return nullptr;
         }
     }
 
-    vk::DebugUtilsMessengerEXT Renderer::makeVDebugMessenger() noexcept {
+    vk::DebugUtilsMessengerEXT Renderer::makeVDebugMessenger() const noexcept {
 #if(TV_DEBUG_MODE)
         vk::DebugUtilsMessengerCreateInfoEXT createInfo{
             vk::DebugUtilsMessengerCreateFlagsEXT(),
@@ -211,6 +224,21 @@ namespace tv {
 
         return _vInstance.createDebugUtilsMessengerEXT(createInfo, nullptr, _vDispatchLoaderDynamic);
 #endif
+        return nullptr;
+    }
+
+    vk::PhysicalDevice Renderer::chooseDevice() const noexcept {
+        auto& logger = Logger::instance();
+        const std::vector<vk::PhysicalDevice> availableDevices = _vInstance.enumeratePhysicalDevices();
+
+        for (const vk::PhysicalDevice& device : availableDevices) {
+#if(TV_DEBUG_MODE)
+            logger.log(std::format("{}: {}\n", constants::messages::VULKAN_DEVICE_NAME, device.getProperties().deviceName.data()));
+#endif
+            if (deviceIsSuitable(device))
+                return device;
+        }
+
         return nullptr;
     }
 }

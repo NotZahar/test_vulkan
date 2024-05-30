@@ -21,19 +21,18 @@ namespace tv {
 
         ~Renderer();
 
-        vk::Instance makeVInstance() noexcept;
-        vk::DebugUtilsMessengerEXT makeVDebugMessenger() noexcept;
-        void printAdditionalInfo(const uint32_t vulkanVersion, const std::vector<const char*>& glfwExtensions) noexcept;
-        bool vExtensionsSupported(const std::vector<const char*>& vulkanExtensions) noexcept;
-        bool vLayersSupported(const std::vector<const char*>& vulkanLayers) noexcept;
-
-        inline static constexpr int _windowWidth = 800;
-        inline static constexpr int _windowHeight = 600;
+        [[nodiscard]] vk::Instance makeVInstance() const noexcept;
+        [[nodiscard]] vk::DebugUtilsMessengerEXT makeVDebugMessenger() const noexcept;
+        [[nodiscard]] vk::PhysicalDevice chooseDevice() const noexcept;
+        void printAdditionalInfo(const uint32_t vulkanVersion, const std::vector<const char*>& glfwExtensions) const noexcept;
+        bool vExtensionsSupported(const std::vector<const char*>& vulkanExtensions) const noexcept;
+        bool vLayersSupported(const std::vector<const char*>& vulkanLayers) const noexcept;
 
         void initWindow() noexcept;
 
         GLFWwindow* _mainWindow;
         vk::Instance _vInstance;
+        vk::PhysicalDevice _physicalDevice;
         vk::DebugUtilsMessengerEXT _vDebugMessenger;
         vk::DispatchLoaderDynamic _vDispatchLoaderDynamic;
     };

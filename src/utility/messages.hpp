@@ -11,6 +11,7 @@ namespace tv::constants {
         inline static const std::string VULKAN_REQUESTED_EXTENSIONS = "Requested extensions";
         inline static const std::string VULKAN_EXTENSION_SUPPORTED = "Extension supported";
         inline static const std::string VULKAN_LAYER_SUPPORTED = "Layer supported";
+        inline static const std::string VULKAN_DEVICE_NAME = "Device name";
 
         // errors
         inline static const std::string VULKAN_INSTANCE_CREATION_FAILED = "Failed to create Vulkan instance";
