@@ -24,7 +24,6 @@ target_include_directories(
             ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/GLFW/include
 )
 
-# TODO: change to generator expression
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_link_libraries(
         ${PROJECT_NAME}

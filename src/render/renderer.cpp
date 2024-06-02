@@ -248,6 +248,7 @@ namespace tv {
 
     void Renderer::createVSurface(vk::Instance& vInstance, vk::SurfaceKHR& vSurface) const noexcept {
         VkSurfaceKHR surface{};
+        assert(_mainWindow != nullptr);
         if (glfwCreateWindowSurface(vInstance, _mainWindow, nullptr, &surface) != VK_SUCCESS) {
 #if(TV_DEBUG_MODE)
             Logger::instance().err(std::format("{}\n", constants::messages::VULKAN_SURFACE_CREATION_FAILED));
