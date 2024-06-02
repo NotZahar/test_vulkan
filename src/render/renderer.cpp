@@ -34,17 +34,18 @@ namespace tv {
             return requiredExtensions.empty();
         }
 
-        [[nodiscard]] structures::VQueueFamilyIndices findQueueFamilies(const vk::PhysicalDevice& physicalDevice) {
+        [[nodiscard]] structures::VQueueFamilyIndices findQueueFamilies(const vk::PhysicalDevice& physicalDevice, vk::SurfaceKHR& surface) {
             structures::VQueueFamilyIndices indices;
             const auto queueFamilies = physicalDevice.getQueueFamilyProperties();
 #if(TV_DEBUG_MODE)
             Logger::instance().log(std::format("    {}: {}\n", constants::messages::VULKAN_DEVICE_QUEUE_FAMILIES, queueFamilies.size()));
 #endif
             for (int i = 0; const vk::QueueFamilyProperties& queueFamily : queueFamilies) {
-                if (queueFamily.queueFlags & vk::QueueFlagBits::eGraphics) {
+                if (queueFamily.queueFlags & vk::QueueFlagBits::eGraphics)
                     indices.graphicsFamily = i;
+
+                if (physicalDevice.getSurfaceSupportKHR(i, surface))
                     indices.presentFamily = i;
-                }
 
                 if (indices.isComplete())
                     break;
@@ -62,20 +63,30 @@ namespace tv {
           _vPhysicalDevice{ nullptr },
           _vDevice{ nullptr },
           _vGraphicsQueue{ nullptr },
+          _vPresentQueue{ nullptr },
           _vDebugMessenger{ nullptr }
     {
         glfwInit();
+        initWindow();
+
         _vInstance = makeVInstance();
         _vDispatchLoaderDynamic.init(_vInstance, vkGetInstanceProcAddr);
-        _vDebugMessenger = makeVDebugMessenger();
-        _vPhysicalDevice = chooseVDevice();
-        _vDevice = createVLogicalDevice();
-        _vGraphicsQueue = getVQueue();
-        initWindow();
+        _vDebugMessenger = makeVDebugMessenger(_vInstance);
+
+        createVSurface(_vInstance, _vSurface);
+
+        _vPhysicalDevice = chooseVDevice(_vInstance);
+        _vDevice = createVLogicalDevice(_vPhysicalDevice, _vSurface);
+
+        auto vQueues = getVQueues(_vPhysicalDevice, _vDevice, _vSurface);
+        assert(vQueues.size() == 2);
+        _vGraphicsQueue = vQueues[0];
+        _vPresentQueue = vQueues[1];
     }
 
     Renderer::~Renderer() {
         _vDevice.destroy();
+        _vInstance.destroySurfaceKHR(_vSurface);
 #if(TV_DEBUG_MODE)
         _vInstance.destroyDebugUtilsMessengerEXT(_vDebugMessenger, nullptr, _vDispatchLoaderDynamic);
 #endif
@@ -235,7 +246,18 @@ namespace tv {
         }
     }
 
-    vk::DebugUtilsMessengerEXT Renderer::makeVDebugMessenger() const noexcept {
+    void Renderer::createVSurface(vk::Instance& vInstance, vk::SurfaceKHR& vSurface) const noexcept {
+        VkSurfaceKHR surface{};
+        if (glfwCreateWindowSurface(vInstance, _mainWindow, nullptr, &surface) != VK_SUCCESS) {
+#if(TV_DEBUG_MODE)
+            Logger::instance().err(std::format("{}\n", constants::messages::VULKAN_SURFACE_CREATION_FAILED));
+#endif
+        }
+
+        vSurface = surface;
+    }
+
+    vk::DebugUtilsMessengerEXT Renderer::makeVDebugMessenger([[maybe_unused]] vk::Instance& vInstance) const noexcept {
 #if(TV_DEBUG_MODE)
         vk::DebugUtilsMessengerCreateInfoEXT createInfo{
             vk::DebugUtilsMessengerCreateFlagsEXT(),
@@ -249,14 +271,15 @@ namespace tv {
             nullptr
         };
 
-        return _vInstance.createDebugUtilsMessengerEXT(createInfo, nullptr, _vDispatchLoaderDynamic);
-#endif
+        return vInstance.createDebugUtilsMessengerEXT(createInfo, nullptr, _vDispatchLoaderDynamic);
+#else
         return nullptr;
+#endif
     }
 
-    vk::PhysicalDevice Renderer::chooseVDevice() const noexcept {
+    vk::PhysicalDevice Renderer::chooseVDevice(const vk::Instance& vInstance) const noexcept {
         auto& logger = Logger::instance();
-        const std::vector<vk::PhysicalDevice> availableDevices = _vInstance.enumeratePhysicalDevices();
+        const std::vector<vk::PhysicalDevice> availableDevices = vInstance.enumeratePhysicalDevices();
         if (availableDevices.empty()) {
             logger.err(std::format("{}\n", constants::messages::VULKAN_NO_AVAILABLE_DEVICE));
             return nullptr;
@@ -273,34 +296,41 @@ namespace tv {
         return nullptr;
     }
 
-    vk::Device Renderer::createVLogicalDevice() const noexcept {
+    vk::Device Renderer::createVLogicalDevice(vk::PhysicalDevice& vPhysicalDevice, vk::SurfaceKHR& vSurface) const noexcept {
 #if(TV_DEBUG_MODE)
         Logger::instance().log(std::format("{}\n", constants::messages::VULKAN_DEVICE_CREATION_STARTED));
 #endif
-        structures::VQueueFamilyIndices familyIndices = findQueueFamilies(_vPhysicalDevice);
+        structures::VQueueFamilyIndices familyIndices = findQueueFamilies(vPhysicalDevice, vSurface);
+        std::vector<uint32_t> uniqueFamilyIndices;
+
+        assert(familyIndices.graphicsFamily.has_value() && familyIndices.presentFamily.has_value());
+        uniqueFamilyIndices.emplace_back(familyIndices.graphicsFamily.value());
+        if (familyIndices.graphicsFamily.value() != familyIndices.presentFamily.value())
+            uniqueFamilyIndices.emplace_back(familyIndices.presentFamily.value());
+
         float queuePriority{ 1 };
         constexpr uint32_t queueCount{ 1 };
-        constexpr uint32_t requestedQueuesSize{ 1 };
         constexpr uint32_t enabledExtensionCount{ 0 };
 
-        assert(familyIndices.graphicsFamily.has_value());
-        vk::DeviceQueueCreateInfo queueCreateInfo{
-            vk::DeviceQueueCreateFlags(),
-            familyIndices.graphicsFamily.value(),
-            queueCount,
-            &queuePriority
-        };
+        std::vector<vk::DeviceQueueCreateInfo> queueCreateInfo;
+        for (uint32_t index : uniqueFamilyIndices) {
+            queueCreateInfo.emplace_back(vk::DeviceQueueCreateInfo{
+                vk::DeviceQueueCreateFlags(),
+                index,
+                queueCount,
+                &queuePriority
+            });
+        }
 
         vk::PhysicalDeviceFeatures deviceFeatures{};
-
         std::vector<const char*> enabledLayers;
 #if(TV_DEBUG_MODE)
         enabledLayers.emplace_back(constants::config::VULKAN_LAYER_VALIDATION.c_str());
 #endif
         vk::DeviceCreateInfo deviceInfo{
             vk::DeviceCreateFlags(),
-            requestedQueuesSize,
-            &queueCreateInfo,
+            static_cast<uint32_t>(queueCreateInfo.size()),
+            queueCreateInfo.data(),
             static_cast<uint32_t>(enabledLayers.size()),
             enabledLayers.data(),
             enabledExtensionCount,
@@ -309,23 +339,26 @@ namespace tv {
         };
 
         try {
-            return _vPhysicalDevice.createDevice(deviceInfo);
+            return vPhysicalDevice.createDevice(deviceInfo);
         } catch (const vk::SystemError& err) {
-            Logger::instance().err(std::format("{}\n", constants::messages::VULKAN_DEVICE_CREATION_FAILED));
+            Logger::instance().err(std::format("{}: {}\n", constants::messages::VULKAN_DEVICE_CREATION_FAILED, err.what()));
         }
 
         return nullptr;
     }
 
-    vk::Queue Renderer::getVQueue() const noexcept {
+    std::vector<vk::Queue> Renderer::getVQueues(const vk::PhysicalDevice& vPhysicalDevice, vk::Device& vDevice, vk::SurfaceKHR& vSurface) const noexcept {
 #if(TV_DEBUG_MODE)
         Logger::instance().log(std::format("{}\n", constants::messages::VULKAN_GETTING_QUEUE_STARTED));
 #endif
-        structures::VQueueFamilyIndices indices = findQueueFamilies(_vPhysicalDevice);
+        structures::VQueueFamilyIndices indices = findQueueFamilies(vPhysicalDevice, vSurface);
         constexpr uint32_t queueIndex{ 0 };
-        assert(indices.graphicsFamily.has_value());
 
-        return _vDevice.getQueue(indices.graphicsFamily.value(), queueIndex);
+        assert(indices.graphicsFamily.has_value() && indices.presentFamily.has_value());
+        return {
+            vDevice.getQueue(indices.graphicsFamily.value(), queueIndex),
+            vDevice.getQueue(indices.presentFamily.value(), queueIndex)
+        };
     }
 }
 

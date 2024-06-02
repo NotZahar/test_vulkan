@@ -24,16 +24,26 @@ target_include_directories(
             ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/GLFW/include
 )
 
-target_link_libraries(
-    ${PROJECT_NAME}
-        PRIVATE
-            Vulkan::Vulkan
-            ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/GLFW/lib/libglfw3.a
-)
+# TODO: change to generator expression
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_link_libraries(
+        ${PROJECT_NAME}
+            PRIVATE
+                Vulkan::Vulkan
+                ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/GLFW/lib/mingw/libglfw3.a
+    )
+else()
+    target_link_libraries(
+        ${PROJECT_NAME}
+            PRIVATE
+                Vulkan::Vulkan
+                ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/GLFW/lib/msvc/glfw3.lib
+    )
+endif()
 
 add_compile_definitions("TV_DEBUG_MODE=$<CONFIG:Debug>")
 
-if(CMAKE_COMPILER_IS_GNUCXX)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_compile_options(
         ${PROJECT_NAME}
             PRIVATE
