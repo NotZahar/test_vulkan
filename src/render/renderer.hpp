@@ -23,7 +23,9 @@ namespace tv {
 
         [[nodiscard]] vk::Instance makeVInstance() const noexcept;
         [[nodiscard]] vk::DebugUtilsMessengerEXT makeVDebugMessenger() const noexcept;
-        [[nodiscard]] vk::PhysicalDevice chooseDevice() const noexcept;
+        [[nodiscard]] vk::PhysicalDevice chooseVDevice() const noexcept;
+        [[nodiscard]] vk::Device createVLogicalDevice() const noexcept;
+        [[nodiscard]] vk::Queue getVQueue() const noexcept;
         void printAdditionalInfo(const uint32_t vulkanVersion, const std::vector<const char*>& glfwExtensions) const noexcept;
         bool vExtensionsSupported(const std::vector<const char*>& vulkanExtensions) const noexcept;
         bool vLayersSupported(const std::vector<const char*>& vulkanLayers) const noexcept;
@@ -32,7 +34,9 @@ namespace tv {
 
         GLFWwindow* _mainWindow;
         vk::Instance _vInstance;
-        vk::PhysicalDevice _physicalDevice;
+        vk::PhysicalDevice _vPhysicalDevice;
+        vk::Device _vDevice;
+        vk::Queue _vGraphicsQueue;
         vk::DebugUtilsMessengerEXT _vDebugMessenger;
         vk::DispatchLoaderDynamic _vDispatchLoaderDynamic;
     };

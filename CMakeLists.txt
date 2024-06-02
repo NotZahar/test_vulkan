@@ -9,11 +9,12 @@ find_package(Vulkan REQUIRED)
 
 add_executable(${PROJECT_NAME})
 
-target_sources(${PROJECT_NAME}
-    PRIVATE
-        src/main.cpp
-        src/logger.cpp
-        src/render/renderer.cpp
+target_sources(
+    ${PROJECT_NAME}
+        PRIVATE
+            src/main.cpp
+            src/logger.cpp
+            src/render/renderer.cpp
 )
 
 target_include_directories(

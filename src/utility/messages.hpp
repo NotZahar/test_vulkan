@@ -12,6 +12,9 @@ namespace tv::constants {
         inline static const std::string VULKAN_EXTENSION_SUPPORTED = "Extension supported";
         inline static const std::string VULKAN_LAYER_SUPPORTED = "Layer supported";
         inline static const std::string VULKAN_DEVICE_NAME = "Device name";
+        inline static const std::string VULKAN_DEVICE_QUEUE_FAMILIES = "Available queue families";
+        inline static const std::string VULKAN_DEVICE_CREATION_STARTED = "Logical device creation started";
+        inline static const std::string VULKAN_GETTING_QUEUE_STARTED = "Getting queue started";
 
         // errors
         inline static const std::string VULKAN_INSTANCE_CREATION_FAILED = "Failed to create Vulkan instance";
@@ -19,5 +22,7 @@ namespace tv::constants {
         inline static const std::string VULKAN_SOME_LAYERS_NOT_SUPPORTED = "Some layers not supported";
         inline static const std::string VULKAN_EXTENSION_NOT_SUPPORTED = "Extension not supported";
         inline static const std::string VULKAN_LAYER_NOT_SUPPORTED = "Layer not supported";
+        inline static const std::string VULKAN_NO_AVAILABLE_DEVICE = "Failed to find supported device";
+        inline static const std::string VULKAN_DEVICE_CREATION_FAILED = "Device creation failed";
     };
 }
