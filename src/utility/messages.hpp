@@ -25,5 +25,6 @@ namespace tv::constants {
         inline static const std::string VULKAN_NO_AVAILABLE_DEVICE = "Failed to find supported device";
         inline static const std::string VULKAN_DEVICE_CREATION_FAILED = "Device creation failed";
         inline static const std::string VULKAN_SURFACE_CREATION_FAILED = "Surface creation failed";
+        inline static const std::string VULKAN_SWAPCHAIN_CREATION_FAILED = "Swapchain creation failed";
     };
 }
