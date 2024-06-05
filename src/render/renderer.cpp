@@ -56,13 +56,19 @@ namespace tv {
     }
 
     Renderer::~Renderer() {
+        std::ranges::for_each(_vSwapChainBundle.frames, [this](structures::VSwapChainFrame& frame) {
+            _vDevice.destroyImageView(frame.imageView);
+        });
+
         _vDevice.destroySwapchainKHR(_vSwapChainBundle.swapChain);
         _vDevice.destroy();
+
         _vInstance.destroySurfaceKHR(_vSurface);
 #if(TV_DEBUG_MODE)
         _vInstance.destroyDebugUtilsMessengerEXT(_vDebugMessenger, nullptr, _vDispatchLoaderDynamic);
 #endif
         _vInstance.destroy();
+
         glfwDestroyWindow(_mainWindow);
         glfwTerminate();
     }
@@ -239,6 +245,10 @@ namespace tv {
     }
 
     structures::VSwapChainBundle Renderer::createSwapchain(vk::Device& vDevice, vk::PhysicalDevice& vPhysicalDevice, vk::SurfaceKHR& vSurface) const noexcept {
+        auto& logger = Logger::instance();
+#if(TV_DEBUG_MODE)
+        logger.log(std::format("{}\n", constants::messages::VULKAN_SWAPCHAIN_CREATION_STARTED));
+#endif
         structures::VSwapChainDetails details = querySwapchainDetails(vPhysicalDevice, vSurface);
         vk::SurfaceFormatKHR format = chooseSwapchainSurfaceFormat(details.formats);
         vk::PresentModeKHR presentMode = chooseSwapchainPresentMode(details.presentMods);
@@ -285,11 +295,31 @@ namespace tv {
             bundle.swapChain = vDevice.createSwapchainKHR(createInfo);
         } catch (const vk::SystemError& err) {
             assert(false);
-            Logger::instance().err(std::format("{}\n", constants::messages::VULKAN_SWAPCHAIN_CREATION_FAILED));
+            logger.err(std::format("{}\n", constants::messages::VULKAN_SWAPCHAIN_CREATION_FAILED));
             return bundle;
         }
 
-        bundle.images = vDevice.getSwapchainImagesKHR(bundle.swapChain);
+        const std::vector<vk::Image> images = vDevice.getSwapchainImagesKHR(bundle.swapChain);
+        bundle.frames.reserve(images.size());
+        for (size_t i = 0; i < images.size(); ++i) {
+            vk::ImageViewCreateInfo imageViewCreateInfo{};
+            imageViewCreateInfo.image = images[i];
+            imageViewCreateInfo.viewType = vk::ImageViewType::e2D;
+            imageViewCreateInfo.format = format.format;
+            imageViewCreateInfo.components.r = vk::ComponentSwizzle::eIdentity;
+            imageViewCreateInfo.components.g = vk::ComponentSwizzle::eIdentity;
+            imageViewCreateInfo.components.b = vk::ComponentSwizzle::eIdentity;
+            imageViewCreateInfo.components.a = vk::ComponentSwizzle::eIdentity;
+            imageViewCreateInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+            imageViewCreateInfo.subresourceRange.baseMipLevel = 0;
+            imageViewCreateInfo.subresourceRange.levelCount = 1;
+            imageViewCreateInfo.subresourceRange.baseArrayLayer = 0;
+            imageViewCreateInfo.subresourceRange.layerCount = 1;
+            imageViewCreateInfo.format = format.format;
+
+            bundle.frames.emplace_back(structures::VSwapChainFrame{ images[i], vDevice.createImageView(imageViewCreateInfo) });
+        }
+
         bundle.format = format.format;
         bundle.extent = extent;
 

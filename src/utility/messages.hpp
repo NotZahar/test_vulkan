@@ -14,6 +14,7 @@ namespace tv::constants {
         inline static const std::string VULKAN_DEVICE_NAME = "Device name";
         inline static const std::string VULKAN_DEVICE_QUEUE_FAMILIES = "Available queue families";
         inline static const std::string VULKAN_DEVICE_CREATION_STARTED = "Logical device creation started";
+        inline static const std::string VULKAN_SWAPCHAIN_CREATION_STARTED = "Swapchain creation started";
         inline static const std::string VULKAN_GETTING_QUEUE_STARTED = "Getting queue started";
 
         // errors

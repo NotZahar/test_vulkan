@@ -22,9 +22,14 @@ namespace tv::structures {
         std::vector<vk::PresentModeKHR> presentMods;
     };
 
+    struct VSwapChainFrame {
+        vk::Image image{ nullptr };
+        vk::ImageView imageView{ nullptr };
+    };
+
     struct VSwapChainBundle {
         vk::SwapchainKHR swapChain{ nullptr };
-        std::vector<vk::Image> images{ nullptr };
+        std::vector<VSwapChainFrame> frames;
         vk::Format format;
         vk::Extent2D extent;
     };
