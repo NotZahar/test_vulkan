@@ -1,5 +1,2 @@
 CMAKE:
 - Target link change to generator expression
-
-CPP:
-- Extract the window creation code from Render

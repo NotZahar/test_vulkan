@@ -5,6 +5,7 @@
 #include <set>
 #include <string>
 #include <limits>
+#include <mutex>
 #include <cassert>
 #include <cstring>
 
@@ -27,33 +28,14 @@ namespace tv {
     }
 
     Renderer::Renderer() noexcept
-        : _mainWindow{ nullptr },
+        : _window{ nullptr },
           _vInstance{ nullptr },
           _vPhysicalDevice{ nullptr },
           _vDevice{ nullptr },
           _vGraphicsQueue{ nullptr },
           _vPresentQueue{ nullptr },
           _vDebugMessenger{ nullptr }
-    {
-        glfwInit();
-        initWindow();
-
-        _vInstance = makeVInstance();
-        _vDispatchLoaderDynamic.init(_vInstance, vkGetInstanceProcAddr);
-        _vDebugMessenger = makeVDebugMessenger(_vInstance);
-
-        createVSurface(_vInstance, _vSurface);
-
-        _vPhysicalDevice = chooseVDevice(_vInstance);
-        _vDevice = createVLogicalDevice(_vPhysicalDevice, _vSurface);
-
-        auto vQueues = getVQueues(_vPhysicalDevice, _vDevice, _vSurface);
-        assert(vQueues.size() == 2);
-        _vGraphicsQueue = vQueues[0];
-        _vPresentQueue = vQueues[1];
-
-        _vSwapChainBundle = createSwapchain(_vDevice, _vPhysicalDevice, _vSurface);
-    }
+    {}
 
     Renderer::~Renderer() {
         std::ranges::for_each(_vSwapChainBundle.frames, [this](structures::VSwapChainFrame& frame) {
@@ -68,32 +50,39 @@ namespace tv {
         _vInstance.destroyDebugUtilsMessengerEXT(_vDebugMessenger, nullptr, _vDispatchLoaderDynamic);
 #endif
         _vInstance.destroy();
-
-        glfwDestroyWindow(_mainWindow);
-        glfwTerminate();
     }
 
-    void Renderer::initWindow() noexcept {
-        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-        glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+    void Renderer::setup(Renderer& renderer, GLFWwindow* window) noexcept {
+        static std::once_flag setupFlag;
+        std::call_once(setupFlag, [&renderer, window]() {
+            renderer.init(window);
+        });
+    }
 
-        _mainWindow = glfwCreateWindow(
-            constants::config::WINDOW_MAIN_WIDTH,
-            constants::config::WINDOW_MAIN_HEIGHT,
-            constants::config::WINDOW_TITLE.c_str(),
-            nullptr,
-            nullptr
-        );
+    void Renderer::init(GLFWwindow* window) noexcept {
+        assert(window != nullptr);
+        _window = window;
+
+        _vInstance = makeVInstance();
+        _vDispatchLoaderDynamic.init(_vInstance, vkGetInstanceProcAddr);
+        _vDebugMessenger = makeVDebugMessenger(_vInstance);
+
+        createVSurface(_window, _vInstance, _vSurface);
+
+        _vPhysicalDevice = chooseVDevice(_vInstance);
+        _vDevice = createVLogicalDevice(_vPhysicalDevice, _vSurface);
+
+        auto vQueues = getVQueues(_vPhysicalDevice, _vDevice, _vSurface);
+        assert(vQueues.size() == 2);
+        _vGraphicsQueue = vQueues[0];
+        _vPresentQueue = vQueues[1];
+
+        _vSwapChainBundle = createSwapchain(_window, _vDevice, _vPhysicalDevice, _vSurface);
     }
 
     Renderer& Renderer::instance() noexcept {
         static Renderer instance;
         return instance;
-    }
-
-    void Renderer::processEvents() noexcept {
-        while (!glfwWindowShouldClose(_mainWindow))
-            glfwPollEvents();
     }
 
     void Renderer::printAdditionalInfo(const uint32_t vulkanVersion, const std::vector<const char*>& vulkanExtensions) const noexcept {
@@ -229,13 +218,13 @@ namespace tv {
         return vk::PresentModeKHR::eFifo;
     }
 
-    vk::Extent2D Renderer::chooseSwapchainExtent(const vk::SurfaceCapabilitiesKHR& vCapabilities) const noexcept {
+    vk::Extent2D Renderer::chooseSwapchainExtent(GLFWwindow* window, const vk::SurfaceCapabilitiesKHR& vCapabilities) const noexcept {
         if (vCapabilities.currentExtent.width != std::numeric_limits<uint32_t>::max())
             return vCapabilities.currentExtent;
 
         int width;
         int height;
-        glfwGetFramebufferSize(_mainWindow, &width, &height);
+        glfwGetFramebufferSize(window, &width, &height);
 
         vk::Extent2D extent{ static_cast<uint32_t>(width), static_cast<uint32_t>(height) };
         extent.width = std::clamp(extent.width, vCapabilities.minImageExtent.width, vCapabilities.maxImageExtent.width);
@@ -244,7 +233,7 @@ namespace tv {
         return extent;
     }
 
-    structures::VSwapChainBundle Renderer::createSwapchain(vk::Device& vDevice, vk::PhysicalDevice& vPhysicalDevice, vk::SurfaceKHR& vSurface) const noexcept {
+    structures::VSwapChainBundle Renderer::createSwapchain(GLFWwindow* window, vk::Device& vDevice, vk::PhysicalDevice& vPhysicalDevice, vk::SurfaceKHR& vSurface) const noexcept {
         auto& logger = Logger::instance();
 #if(TV_DEBUG_MODE)
         logger.log(std::format("{}\n", constants::messages::VULKAN_SWAPCHAIN_CREATION_STARTED));
@@ -252,7 +241,7 @@ namespace tv {
         structures::VSwapChainDetails details = querySwapchainDetails(vPhysicalDevice, vSurface);
         vk::SurfaceFormatKHR format = chooseSwapchainSurfaceFormat(details.formats);
         vk::PresentModeKHR presentMode = chooseSwapchainPresentMode(details.presentMods);
-        vk::Extent2D extent = chooseSwapchainExtent(details.capabilities);
+        vk::Extent2D extent = chooseSwapchainExtent(window, details.capabilities);
         uint32_t imageCount = std::min(
             details.capabilities.maxImageCount,
             details.capabilities.minImageCount + 1
@@ -348,8 +337,8 @@ namespace tv {
         std::vector<const char*> vulkanLayers{};
 
 #if(TV_DEBUG_MODE)
-        vulkanExtensions.emplace_back(constants::config::VULKAN_EXT_DEBUG.c_str());
-        vulkanLayers.emplace_back(constants::config::VULKAN_LAYER_VALIDATION.c_str());
+        vulkanExtensions.emplace_back(constants::config::VULKAN_EXT_DEBUG);
+        vulkanLayers.emplace_back(constants::config::VULKAN_LAYER_VALIDATION);
         ++vulkanExtensionCount;
 
         printAdditionalInfo(vulkanVersion, vulkanExtensions);
@@ -365,7 +354,7 @@ namespace tv {
         }
 
         vk::ApplicationInfo appInfo{
-            constants::config::APP_NAME.c_str(),
+            constants::config::APP_NAME,
             vulkanVersion,
             nullptr,
             vulkanVersion,
@@ -391,10 +380,10 @@ namespace tv {
         }
     }
 
-    void Renderer::createVSurface(vk::Instance& vInstance, vk::SurfaceKHR& vSurface) const noexcept {
+    void Renderer::createVSurface(GLFWwindow* window, vk::Instance& vInstance, vk::SurfaceKHR& vSurface) const noexcept {
         VkSurfaceKHR surface{};
-        assert(_mainWindow != nullptr);
-        if (glfwCreateWindowSurface(vInstance, _mainWindow, nullptr, &surface) != VK_SUCCESS) {
+        assert(window != nullptr);
+        if (glfwCreateWindowSurface(vInstance, window, nullptr, &surface) != VK_SUCCESS) {
 #if(TV_DEBUG_MODE)
             Logger::instance().err(std::format("{}\n", constants::messages::VULKAN_SURFACE_CREATION_FAILED));
 #endif
@@ -474,7 +463,7 @@ namespace tv {
         vk::PhysicalDeviceFeatures deviceFeatures{};
         std::vector<const char*> enabledLayers;
 #if(TV_DEBUG_MODE)
-        enabledLayers.emplace_back(constants::config::VULKAN_LAYER_VALIDATION.c_str());
+        enabledLayers.emplace_back(constants::config::VULKAN_LAYER_VALIDATION);
 #endif
         vk::DeviceCreateInfo deviceInfo{
             vk::DeviceCreateFlags(),

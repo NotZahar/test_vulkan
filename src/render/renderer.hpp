@@ -14,8 +14,7 @@ namespace tv {
         TV_NCM(Renderer)
 
         static Renderer& instance() noexcept;
-
-        void processEvents() noexcept;
+        static void setup(Renderer& renderer, GLFWwindow* window) noexcept;
 
     private:
         Renderer() noexcept;
@@ -23,7 +22,7 @@ namespace tv {
         ~Renderer();
 
         [[nodiscard]] vk::Instance makeVInstance() const noexcept;
-        void createVSurface(vk::Instance& vInstance, vk::SurfaceKHR& vSurface) const noexcept;
+        void createVSurface(GLFWwindow* window, vk::Instance& vInstance, vk::SurfaceKHR& vSurface) const noexcept;
         [[nodiscard]] vk::DebugUtilsMessengerEXT makeVDebugMessenger(vk::Instance& vInstance) const noexcept;
         [[nodiscard]] vk::PhysicalDevice chooseVDevice(const vk::Instance& vInstance) const noexcept;
         [[nodiscard]] vk::Device createVLogicalDevice(vk::PhysicalDevice& vPhysicalDevice, vk::SurfaceKHR& vSurface) const noexcept;
@@ -37,12 +36,12 @@ namespace tv {
         [[nodiscard]] structures::VSwapChainDetails querySwapchainDetails(const vk::PhysicalDevice& vDevice, vk::SurfaceKHR& vSurface) const noexcept;
         [[nodiscard]] vk::SurfaceFormatKHR chooseSwapchainSurfaceFormat(const std::vector<vk::SurfaceFormatKHR>& vFormats) const noexcept;
         [[nodiscard]] vk::PresentModeKHR chooseSwapchainPresentMode(const std::vector<vk::PresentModeKHR>& vPresentMods) const noexcept;
-        [[nodiscard]] vk::Extent2D chooseSwapchainExtent(const vk::SurfaceCapabilitiesKHR& vCapabilities) const noexcept;
-        [[nodiscard]] structures::VSwapChainBundle createSwapchain(vk::Device& vDevice, vk::PhysicalDevice& vPhysicalDevice, vk::SurfaceKHR& vSurface) const noexcept;
+        [[nodiscard]] vk::Extent2D chooseSwapchainExtent(GLFWwindow* window, const vk::SurfaceCapabilitiesKHR& vCapabilities) const noexcept;
+        [[nodiscard]] structures::VSwapChainBundle createSwapchain(GLFWwindow* window, vk::Device& vDevice, vk::PhysicalDevice& vPhysicalDevice, vk::SurfaceKHR& vSurface) const noexcept;
 
-        void initWindow() noexcept;
+        void init(GLFWwindow* window) noexcept;
 
-        GLFWwindow* _mainWindow;
+        GLFWwindow* _window;
         vk::Instance _vInstance;
         vk::PhysicalDevice _vPhysicalDevice;
         vk::Device _vDevice;

@@ -1,5 +1,8 @@
 # CMakeLists.txt.user
 *.txt.user
 
+# shaders
+*.spv
+
 # build
 /build

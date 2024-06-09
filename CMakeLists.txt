@@ -14,8 +14,12 @@ target_sources(
         PRIVATE
             src/main.cpp
             src/logger.cpp
+            src/ui/main_window.cpp
             src/render/renderer.cpp
+            src/services/file_service.cpp
 )
+
+add_compile_definitions("TV_DEBUG_MODE=$<CONFIG:Debug>")
 
 target_include_directories(
     ${PROJECT_NAME}
@@ -39,8 +43,6 @@ else()
                 ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/GLFW/lib/msvc/glfw3.lib
     )
 endif()
-
-add_compile_definitions("TV_DEBUG_MODE=$<CONFIG:Debug>")
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_compile_options(
