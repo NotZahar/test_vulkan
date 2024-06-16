@@ -23,14 +23,42 @@ namespace tv::structures {
     };
 
     struct VSwapChainFrame {
-        vk::Image image{ nullptr };
-        vk::ImageView imageView{ nullptr };
+        vk::Image image;
+        vk::ImageView imageView;
+        vk::Framebuffer framebuffer;
+        vk::CommandBuffer commandBuffer;
     };
 
     struct VSwapChainBundle {
-        vk::SwapchainKHR swapChain{ nullptr };
+        vk::SwapchainKHR swapChain;
         std::vector<VSwapChainFrame> frames;
         vk::Format format;
         vk::Extent2D extent;
+    };
+
+    struct VGraphicsPipelineInBundle {
+        vk::Device device;
+        std::string vertexFilepath;
+        std::string fragmentFilepath;
+        vk::Extent2D swapchainExtent;
+        vk::Format swapchainImageFormat;
+    };
+
+    struct VGraphicsPipelineBundle {
+        vk::PipelineLayout layout;
+        vk::RenderPass renderpass;
+        vk::Pipeline pipeline;
+    };
+
+    struct VFramebufferInput {
+        vk::Device device;
+        vk::RenderPass renderpass;
+        vk::Extent2D swapchainExtent;
+    };
+
+    struct VCommandBufferInput {
+        vk::Device device;
+        vk::CommandPool commandPool;
+        std::vector<VSwapChainFrame>& frames;
     };
 }

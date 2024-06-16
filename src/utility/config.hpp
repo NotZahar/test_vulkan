@@ -11,5 +11,6 @@ namespace tv::constants {
         // vulkan
         inline static constexpr char VULKAN_EXT_DEBUG[] = "VK_EXT_debug_utils";
         inline static constexpr char VULKAN_LAYER_VALIDATION[] = "VK_LAYER_KHRONOS_validation";
+        inline static constexpr char VULKAN_SHADER_ENTRY_POINT_NAME[] = "main";
     };
 }

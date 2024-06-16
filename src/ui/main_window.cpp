@@ -1,5 +1,7 @@
 #include "main_window.hpp"
 
+#include <sstream>
+
 #include "../utility/config.hpp"
 
 namespace tv::ui {
@@ -12,9 +14,12 @@ namespace tv::ui {
         return _window;
     }
 
-    void MainWindow::processEvents() noexcept {
-        while (!glfwWindowShouldClose(_window))
+    void MainWindow::processEvents(Renderer* renderer) noexcept {
+        while (!glfwWindowShouldClose(_window)) {
             glfwPollEvents();
+            renderer->render();
+            calculateFrameRate();
+        }
     }
 
     MainWindow::MainWindow() noexcept {
@@ -35,6 +40,23 @@ namespace tv::ui {
     MainWindow::~MainWindow() {
         glfwDestroyWindow(_window);
         glfwTerminate();
+    }
+
+    void MainWindow::calculateFrameRate() noexcept {
+        _currentTime = glfwGetTime();
+        double delta = _currentTime - _lastTime;
+
+        if (delta >= 1) {
+            int framerate{ std::max(1, int(_numFrames / delta)) };
+            std::stringstream title;
+            title << constants::config::WINDOW_TITLE << " " << framerate << " fps";
+            glfwSetWindowTitle(_window, title.str().c_str());
+            _lastTime = _currentTime;
+            _numFrames = -1;
+            _frameTime = float(1000.0 / framerate);
+        }
+
+        ++_numFrames;
     }
 }
 

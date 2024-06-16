@@ -1,2 +1,5 @@
 CMAKE:
 - Target link change to generator expression
+
+CPP
+- Logic to event loop

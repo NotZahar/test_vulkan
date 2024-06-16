@@ -1,9 +1,15 @@
 #pragma once
 
+#include <vector>
+#include <string>
+
 namespace tv::service {
-    class FileService
-    {
+    class FileService {
     public:
-        // FileService();
+        FileService() = default;
+
+        ~FileService() = default;
+
+        static std::vector<char> read(const std::string& filePath) noexcept;
     };
 }

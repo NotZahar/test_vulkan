@@ -10,8 +10,10 @@
 #include <cstring>
 
 #include "../logger.hpp"
+#include "../services/file_service.hpp"
 #include "../utility/messages.hpp"
 #include "../utility/config.hpp"
+#include "../utility/paths.hpp"
 
 namespace tv {
     namespace {
@@ -38,8 +40,21 @@ namespace tv {
     {}
 
     Renderer::~Renderer() {
+        _vDevice.waitIdle();
+
+        _vDevice.destroyFence(_vInFlightFence);
+        _vDevice.destroySemaphore(_vImageAvailable);
+        _vDevice.destroySemaphore(_vRenderFinished);
+
+        _vDevice.destroyCommandPool(_vCommandPool);
+
+        _vDevice.destroyPipeline(_vGraphicsPipelineBundle.pipeline);
+        _vDevice.destroyPipelineLayout(_vGraphicsPipelineBundle.layout);
+        _vDevice.destroyRenderPass(_vGraphicsPipelineBundle.renderpass);
+
         std::ranges::for_each(_vSwapChainBundle.frames, [this](structures::VSwapChainFrame& frame) {
             _vDevice.destroyImageView(frame.imageView);
+            _vDevice.destroyFramebuffer(frame.framebuffer);
         });
 
         _vDevice.destroySwapchainKHR(_vSwapChainBundle.swapChain);
@@ -59,25 +74,84 @@ namespace tv {
         });
     }
 
+    void Renderer::render() noexcept {
+        auto waitResult = _vDevice.waitForFences(1, &_vInFlightFence, VK_TRUE, UINT64_MAX);
+        if (waitResult != vk::Result::eSuccess)
+            return;
+
+        auto resetResult = _vDevice.resetFences(1, &_vInFlightFence);
+        if (resetResult != vk::Result::eSuccess)
+            return;
+
+        uint32_t imageIndex = _vDevice.acquireNextImageKHR(_vSwapChainBundle.swapChain, UINT64_MAX, _vImageAvailable, nullptr).value;
+        vk::CommandBuffer commandBuffer = _vSwapChainBundle.frames[imageIndex].commandBuffer;
+
+        commandBuffer.reset();
+
+        recordDrawCommands(commandBuffer, imageIndex, _vGraphicsPipelineBundle, _vSwapChainBundle);
+
+        vk::SubmitInfo submitInfo{};
+
+        vk::Semaphore waitSemaphores[] = { _vImageAvailable };
+        vk::PipelineStageFlags waitStages[] = { vk::PipelineStageFlagBits::eColorAttachmentOutput };
+        submitInfo.waitSemaphoreCount = 1;
+        submitInfo.pWaitSemaphores = waitSemaphores;
+        submitInfo.pWaitDstStageMask = waitStages;
+
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers = &commandBuffer;
+
+        vk::Semaphore signalSemaphores[] = { _vRenderFinished };
+        submitInfo.signalSemaphoreCount = 1;
+        submitInfo.pSignalSemaphores = signalSemaphores;
+
+        try {
+            _vGraphicsQueue.submit(submitInfo, _vInFlightFence);
+        } catch (const vk::SystemError&) {
+            return;
+        }
+
+        vk::PresentInfoKHR presentInfo{};
+        presentInfo.waitSemaphoreCount = 1;
+        presentInfo.pWaitSemaphores = signalSemaphores;
+
+        vk::SwapchainKHR swapChains[] = { _vSwapChainBundle.swapChain };
+        presentInfo.swapchainCount = 1;
+        presentInfo.pSwapchains = swapChains;
+
+        presentInfo.pImageIndices = &imageIndex;
+
+        auto presentResult = _vPresentQueue.presentKHR(presentInfo);
+        if (presentResult != vk::Result::eSuccess)
+            return;
+    }
+
     void Renderer::init(GLFWwindow* window) noexcept {
         assert(window != nullptr);
         _window = window;
 
-        _vInstance = makeVInstance();
+        _vInstance = createInstance();
         _vDispatchLoaderDynamic.init(_vInstance, vkGetInstanceProcAddr);
-        _vDebugMessenger = makeVDebugMessenger(_vInstance);
+        _vDebugMessenger = createDebugMessenger(_vInstance);
 
-        createVSurface(_window, _vInstance, _vSurface);
+        createSurface(_window, _vInstance, _vSurface);
 
-        _vPhysicalDevice = chooseVDevice(_vInstance);
-        _vDevice = createVLogicalDevice(_vPhysicalDevice, _vSurface);
+        _vPhysicalDevice = chooseDevice(_vInstance);
+        _vDevice = createLogicalDevice(_vPhysicalDevice, _vSurface);
 
-        auto vQueues = getVQueues(_vPhysicalDevice, _vDevice, _vSurface);
+        auto vQueues = getQueues(_vPhysicalDevice, _vDevice, _vSurface);
         assert(vQueues.size() == 2);
         _vGraphicsQueue = vQueues[0];
         _vPresentQueue = vQueues[1];
 
         _vSwapChainBundle = createSwapchain(_window, _vDevice, _vPhysicalDevice, _vSurface);
+        _vGraphicsPipelineBundle = createPipeline(_vDevice, _vSwapChainBundle);
+
+        finalSetup(_vDevice, _vPhysicalDevice, _vSurface, _vGraphicsPipelineBundle, _vSwapChainBundle, _vCommandPool, _vMainCommandBuffer);
+
+        _vInFlightFence = createFence(_vDevice);
+        _vImageAvailable = createSemaphore(_vDevice);
+        _vRenderFinished = createSemaphore(_vDevice);
     }
 
     Renderer& Renderer::instance() noexcept {
@@ -233,6 +307,308 @@ namespace tv {
         return extent;
     }
 
+    vk::ShaderModule Renderer::createShaderModule(const std::string& filePath, vk::Device& vDevice) const noexcept {
+        std::vector<char> sourceCode = service::FileService::read(filePath);
+        assert(!sourceCode.empty());
+        vk::ShaderModuleCreateInfo moduleInfo{};
+        moduleInfo.flags = vk::ShaderModuleCreateFlags();
+        moduleInfo.codeSize = sourceCode.size();
+        moduleInfo.pCode = reinterpret_cast<const uint32_t*>(sourceCode.data());
+
+        try {
+            return vDevice.createShaderModule(moduleInfo);
+        } catch (const vk::SystemError& err) {
+#if(TV_DEBUG_MODE)
+            Logger::instance().err(std::format("{}: {}\n", constants::messages::VULKAN_SHADER_MODULE_CREATION_FAILED, err.what()));
+#endif
+        }
+
+        return {};
+    }
+
+    vk::PipelineLayout Renderer::createPipelineLayout(vk::Device& vDevice) const noexcept {
+        vk::PipelineLayoutCreateInfo layoutInfo;
+        layoutInfo.flags = vk::PipelineLayoutCreateFlags();
+        layoutInfo.setLayoutCount = 0;
+        layoutInfo.pushConstantRangeCount = 0;
+
+        try {
+            return vDevice.createPipelineLayout(layoutInfo);
+        } catch (const vk::SystemError& err) {
+#if(TV_DEBUG_MODE)
+            Logger::instance().err(std::format("{}\n", constants::messages::VULKAN_PIPELINE_LAYOUT_CREATION_FAILED));
+#endif
+        }
+
+        return {};
+    }
+
+    vk::RenderPass Renderer::createRenderpass(vk::Device& vDevice, vk::Format vSwapchainImageFormat) const noexcept {
+        vk::AttachmentDescription colorAttachment{};
+        colorAttachment.flags = vk::AttachmentDescriptionFlags();
+        colorAttachment.format = vSwapchainImageFormat;
+        colorAttachment.samples = vk::SampleCountFlagBits::e1;
+        colorAttachment.loadOp = vk::AttachmentLoadOp::eClear;
+        colorAttachment.storeOp = vk::AttachmentStoreOp::eStore;
+        colorAttachment.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+        colorAttachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+        colorAttachment.initialLayout = vk::ImageLayout::eUndefined;
+        colorAttachment.finalLayout = vk::ImageLayout::ePresentSrcKHR;
+
+        vk::AttachmentReference colorAttachmentRef{};
+        colorAttachmentRef.attachment = 0;
+        colorAttachmentRef.layout = vk::ImageLayout::eColorAttachmentOptimal;
+
+        vk::SubpassDescription subpass{};
+        subpass.flags = vk::SubpassDescriptionFlags();
+        subpass.pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
+        subpass.colorAttachmentCount = 1;
+        subpass.pColorAttachments = &colorAttachmentRef;
+
+        vk::RenderPassCreateInfo renderpassInfo{};
+        renderpassInfo.flags = vk::RenderPassCreateFlags();
+        renderpassInfo.attachmentCount = 1;
+        renderpassInfo.pAttachments = &colorAttachment;
+        renderpassInfo.subpassCount = 1;
+        renderpassInfo.pSubpasses = &subpass;
+
+        try {
+            return vDevice.createRenderPass(renderpassInfo);
+        } catch (const vk::SystemError& err) {
+#if(TV_DEBUG_MODE)
+            Logger::instance().err(std::format("{}\n", constants::messages::VULKAN_RENDERPASS_CREATION_FAILED));
+#endif
+        }
+
+        return {};
+    }
+
+    structures::VGraphicsPipelineBundle Renderer::createGraphicsPipeline(structures::VGraphicsPipelineInBundle& vPipelineInBundle) const noexcept {
+        vk::GraphicsPipelineCreateInfo pipelineInfo{};
+        pipelineInfo.flags = vk::PipelineCreateFlags();
+
+        std::vector<vk::PipelineShaderStageCreateInfo> shaderStages;
+
+        vk::PipelineVertexInputStateCreateInfo vertexInputInfo{};
+        vertexInputInfo.flags = vk::PipelineVertexInputStateCreateFlags();
+        vertexInputInfo.vertexBindingDescriptionCount = 0;
+        vertexInputInfo.vertexAttributeDescriptionCount = 0;
+        pipelineInfo.pVertexInputState = &vertexInputInfo;
+
+        vk::PipelineInputAssemblyStateCreateInfo inputAssemblyInfo{};
+        inputAssemblyInfo.flags = vk::PipelineInputAssemblyStateCreateFlags();
+        inputAssemblyInfo.topology = vk::PrimitiveTopology::eTriangleList;
+        pipelineInfo.pInputAssemblyState = &inputAssemblyInfo;
+
+        vk::ShaderModule vertexShader = createShaderModule(vPipelineInBundle.vertexFilepath, vPipelineInBundle.device);
+        vk::PipelineShaderStageCreateInfo vertexShaderInfo{};
+        vertexShaderInfo.flags = vk::PipelineShaderStageCreateFlags();
+        vertexShaderInfo.stage = vk::ShaderStageFlagBits::eVertex;
+        vertexShaderInfo.module = vertexShader;
+        vertexShaderInfo.pName = constants::config::VULKAN_SHADER_ENTRY_POINT_NAME;
+        shaderStages.push_back(vertexShaderInfo);
+
+        vk::Viewport viewport{};
+        viewport.x = 0.0f;
+        viewport.y = 0.0f;
+        viewport.width = vPipelineInBundle.swapchainExtent.width;
+        viewport.height = vPipelineInBundle.swapchainExtent.height;
+        viewport.minDepth = 0.0f;
+        viewport.maxDepth = 1.0f;
+
+        vk::Rect2D scissor{};
+        scissor.offset.x = 0.0f;
+        scissor.offset.y = 0.0f;
+        scissor.extent = vPipelineInBundle.swapchainExtent;
+
+        vk::PipelineViewportStateCreateInfo viewportState = {};
+        viewportState.flags = vk::PipelineViewportStateCreateFlags();
+        viewportState.viewportCount = 1;
+        viewportState.pViewports = &viewport;
+        viewportState.scissorCount = 1;
+        viewportState.pScissors = &scissor;
+        pipelineInfo.pViewportState = &viewportState;
+
+        vk::PipelineRasterizationStateCreateInfo rasterizer{};
+        rasterizer.flags = vk::PipelineRasterizationStateCreateFlags();
+        rasterizer.depthClampEnable = VK_FALSE;
+        rasterizer.rasterizerDiscardEnable = VK_FALSE;
+        rasterizer.polygonMode = vk::PolygonMode::eFill;
+        rasterizer.lineWidth = 1.0f;
+        rasterizer.cullMode = vk::CullModeFlagBits::eBack;
+        rasterizer.frontFace = vk::FrontFace::eClockwise;
+        rasterizer.depthBiasEnable = VK_FALSE;
+        pipelineInfo.pRasterizationState = &rasterizer;
+
+        vk::ShaderModule fragmentShader = createShaderModule(vPipelineInBundle.fragmentFilepath, vPipelineInBundle.device);
+        vk::PipelineShaderStageCreateInfo fragmentShaderInfo{};
+        fragmentShaderInfo.flags = vk::PipelineShaderStageCreateFlags();
+        fragmentShaderInfo.stage = vk::ShaderStageFlagBits::eFragment;
+        fragmentShaderInfo.module = fragmentShader;
+        fragmentShaderInfo.pName = constants::config::VULKAN_SHADER_ENTRY_POINT_NAME;
+        shaderStages.push_back(fragmentShaderInfo);
+
+        pipelineInfo.stageCount = shaderStages.size();
+        pipelineInfo.pStages = shaderStages.data();
+
+        vk::PipelineMultisampleStateCreateInfo multisampling{};
+        multisampling.flags = vk::PipelineMultisampleStateCreateFlags();
+        multisampling.sampleShadingEnable = VK_FALSE;
+        multisampling.rasterizationSamples = vk::SampleCountFlagBits::e1;
+        pipelineInfo.pMultisampleState = &multisampling;
+
+        vk::PipelineColorBlendAttachmentState colorBlendAttachment{};
+        colorBlendAttachment.colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
+        colorBlendAttachment.blendEnable = VK_FALSE;
+
+        vk::PipelineColorBlendStateCreateInfo colorBlending{};
+        colorBlending.flags = vk::PipelineColorBlendStateCreateFlags();
+        colorBlending.logicOpEnable = VK_FALSE;
+        colorBlending.logicOp = vk::LogicOp::eCopy;
+        colorBlending.attachmentCount = 1;
+        colorBlending.pAttachments = &colorBlendAttachment;
+        colorBlending.blendConstants[0] = 0.0f;
+        colorBlending.blendConstants[1] = 0.0f;
+        colorBlending.blendConstants[2] = 0.0f;
+        colorBlending.blendConstants[3] = 0.0f;
+        pipelineInfo.pColorBlendState = &colorBlending;
+
+        vk::PipelineLayout pipelineLayout = createPipelineLayout(vPipelineInBundle.device);
+        pipelineInfo.layout = pipelineLayout;
+
+        vk::RenderPass renderpass = createRenderpass(vPipelineInBundle.device, vPipelineInBundle.swapchainImageFormat);
+        pipelineInfo.renderPass = renderpass;
+        pipelineInfo.subpass = 0;
+
+        pipelineInfo.basePipelineHandle = nullptr;
+
+#if(TV_DEBUG_MODE)
+        Logger::instance().log(std::format("{}\n", constants::messages::VULKAN_GRAPHICS_PIPELINE_CREATION_STARTED));
+#endif
+        vk::Pipeline graphicsPipeline;
+        try {
+            graphicsPipeline = (vPipelineInBundle.device.createGraphicsPipeline(nullptr, pipelineInfo)).value;
+        } catch (const vk::SystemError& err) {
+#if(TV_DEBUG_MODE)
+            Logger::instance().err(std::format("{}\n", constants::messages::VULKAN_PIPELINE_CREATION_FAILED));
+#endif
+            return {};
+        }
+
+        structures::VGraphicsPipelineBundle pipelineBundle;
+        pipelineBundle.layout = pipelineLayout;
+        pipelineBundle.renderpass = renderpass;
+        pipelineBundle.pipeline = graphicsPipeline;
+
+        vPipelineInBundle.device.destroyShaderModule(vertexShader);
+        vPipelineInBundle.device.destroyShaderModule(fragmentShader);
+
+        return pipelineBundle;
+    }
+
+    void Renderer::createFramebuffers(structures::VFramebufferInput& vFramebufferInput, std::vector<structures::VSwapChainFrame>& vFrames) const noexcept {
+        auto& logger = Logger::instance();
+
+        for (auto& frame : vFrames) {
+            std::vector<vk::ImageView> attachments = { frame.imageView };
+
+            vk::FramebufferCreateInfo framebufferInfo;
+            framebufferInfo.flags = vk::FramebufferCreateFlags();
+            framebufferInfo.renderPass = vFramebufferInput.renderpass;
+            framebufferInfo.attachmentCount = attachments.size();
+            framebufferInfo.pAttachments = attachments.data();
+            framebufferInfo.width = vFramebufferInput.swapchainExtent.width;
+            framebufferInfo.height = vFramebufferInput.swapchainExtent.height;
+            framebufferInfo.layers = 1;
+
+            try {
+                frame.framebuffer = vFramebufferInput.device.createFramebuffer(framebufferInfo);
+#if(TV_DEBUG_MODE)
+                logger.log(std::format("{}\n", constants::messages::VULKAN_FRAMEBUFFER_CREATED));
+#endif
+            } catch (const vk::SystemError& err) {
+#if(TV_DEBUG_MODE)
+                logger.err(std::format("{}\n", constants::messages::VULKAN_FRAMEBUFFER_CREATION_FAILED));
+#endif
+            }
+        }
+    }
+
+    vk::CommandPool Renderer::createCommandPool(vk::Device& vDevice, vk::PhysicalDevice& vPhysicalDevice, vk::SurfaceKHR& vSurface) const noexcept {
+        auto& logger = Logger::instance();
+#if(TV_DEBUG_MODE)
+        logger.log(std::format("{}\n", constants::messages::VULKAN_COMMAND_POOL_CREATION_STARTED));
+#endif
+        structures::VQueueFamilyIndices queueFamilyIndices = findQueueFamilies(vPhysicalDevice, vSurface);
+
+        vk::CommandPoolCreateInfo poolInfo;
+        poolInfo.flags = vk::CommandPoolCreateFlags() | vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
+        poolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily.value();
+
+        try {
+            return vDevice.createCommandPool(poolInfo);
+        } catch (const vk::SystemError& err) {
+#if(TV_DEBUG_MODE)
+            logger.err(std::format("{}\n", constants::messages::VULKAN_COMMAND_POOL_CREATION_FAILED));
+#endif
+        }
+
+        return nullptr;
+    }
+
+    vk::CommandBuffer Renderer::createCommandBuffers(structures::VCommandBufferInput& vInputChunk) const noexcept {
+        auto& logger = Logger::instance();
+
+        vk::CommandBufferAllocateInfo allocInfo{};
+        allocInfo.commandPool = vInputChunk.commandPool;
+        allocInfo.level = vk::CommandBufferLevel::ePrimary;
+        allocInfo.commandBufferCount = 1;
+
+        for (std::size_t i = 0; i < vInputChunk.frames.size(); ++i) {
+            try {
+                vInputChunk.frames[i].commandBuffer = vInputChunk.device.allocateCommandBuffers(allocInfo)[0];
+            } catch (const vk::SystemError& err) {
+#if(TV_DEBUG_MODE)
+                logger.err(std::format("{}: {}\n", constants::messages::VULKAN_COMMAND_BUFFER_ALLOCATION_FAILED, err.what()));
+#endif
+                return nullptr;
+            }
+        }
+
+        try {
+            vk::CommandBuffer commandBuffer = vInputChunk.device.allocateCommandBuffers(allocInfo)[0];
+            return commandBuffer;
+        } catch (const vk::SystemError& err) {
+#if(TV_DEBUG_MODE)
+            logger.err(std::format("{}: {}\n", constants::messages::VULKAN_MAIN_COMMAND_BUFFER_ALLOCATION_FAILED, err.what()));
+#endif
+        }
+
+        return nullptr;
+    }
+
+    vk::Semaphore Renderer::createSemaphore(vk::Device& vDevice) const noexcept {
+        vk::SemaphoreCreateInfo semaphoreInfo{};
+        semaphoreInfo.flags = vk::SemaphoreCreateFlags();
+
+        try {
+            return vDevice.createSemaphore(semaphoreInfo);
+        } catch (const vk::SystemError&) {
+            return nullptr;
+        }
+    }
+
+    vk::Fence Renderer::createFence(vk::Device& vDevice) const noexcept {
+        vk::FenceCreateInfo fenceInfo{};
+        fenceInfo.flags = vk::FenceCreateFlags() | vk::FenceCreateFlagBits::eSignaled;
+
+        try {
+            return vDevice.createFence(fenceInfo);
+        } catch (const vk::SystemError&) {
+            return nullptr;
+        }
+    }
+
     structures::VSwapChainBundle Renderer::createSwapchain(GLFWwindow* window, vk::Device& vDevice, vk::PhysicalDevice& vPhysicalDevice, vk::SurfaceKHR& vSurface) const noexcept {
         auto& logger = Logger::instance();
 #if(TV_DEBUG_MODE)
@@ -306,13 +682,75 @@ namespace tv {
             imageViewCreateInfo.subresourceRange.layerCount = 1;
             imageViewCreateInfo.format = format.format;
 
-            bundle.frames.emplace_back(structures::VSwapChainFrame{ images[i], vDevice.createImageView(imageViewCreateInfo) });
+            bundle.frames.emplace_back(structures::VSwapChainFrame{
+                images[i],
+                vDevice.createImageView(imageViewCreateInfo),
+                nullptr,
+                nullptr
+            });
         }
 
         bundle.format = format.format;
         bundle.extent = extent;
 
         return bundle;
+    }
+
+    structures::VGraphicsPipelineBundle Renderer::createPipeline(vk::Device& vDevice, structures::VSwapChainBundle& vSwapchainBundle) const noexcept {
+        structures::VGraphicsPipelineInBundle pipelineInBundle{};
+        pipelineInBundle.device = vDevice;
+        pipelineInBundle.vertexFilepath = constants::path::TRIANGLE_VERTEX_PATH.string();
+        pipelineInBundle.fragmentFilepath = constants::path::TRIANGLE_FRAGMENT_PATH.string();
+        pipelineInBundle.swapchainExtent = vSwapchainBundle.extent;
+        pipelineInBundle.swapchainImageFormat = vSwapchainBundle.format;
+
+        structures::VGraphicsPipelineBundle pipelineBundle = createGraphicsPipeline(pipelineInBundle);
+        return pipelineBundle;
+    }
+
+    void Renderer::finalSetup(vk::Device& vDevice, vk::PhysicalDevice& vPhysicalDevice, vk::SurfaceKHR vSurface, structures::VGraphicsPipelineBundle& vGraphicsPipelineBundle, structures::VSwapChainBundle& vSwapChainBundle, vk::CommandPool& vCommandPool, vk::CommandBuffer vMainCommandBuffer) const noexcept {
+        structures::VFramebufferInput frameBufferInput;
+        frameBufferInput.device = vDevice;
+        frameBufferInput.renderpass = vGraphicsPipelineBundle.renderpass;
+        frameBufferInput.swapchainExtent = vSwapChainBundle.extent;
+
+        createFramebuffers(frameBufferInput, vSwapChainBundle.frames);
+        vCommandPool = createCommandPool(vDevice, vPhysicalDevice, vSurface);
+
+        structures::VCommandBufferInput commandBufferInput = { vDevice, vCommandPool, vSwapChainBundle.frames };
+        vMainCommandBuffer = createCommandBuffers(commandBufferInput);
+    }
+
+    void Renderer::recordDrawCommands(vk::CommandBuffer &vCommandBuffer, uint32_t imageIndex, structures::VGraphicsPipelineBundle& vGraphicsPipelineBundle, structures::VSwapChainBundle& vSwapChainBundle) const noexcept {
+        vk::CommandBufferBeginInfo beginInfo{};
+
+        try {
+            vCommandBuffer.begin(beginInfo);
+        } catch (const vk::SystemError&) {
+            return;
+        }
+
+        vk::RenderPassBeginInfo renderPassInfo{};
+        renderPassInfo.renderPass = vGraphicsPipelineBundle.renderpass;
+        renderPassInfo.framebuffer = vSwapChainBundle.frames[imageIndex].framebuffer;
+        renderPassInfo.renderArea.offset.x = 0;
+        renderPassInfo.renderArea.offset.y = 0;
+        renderPassInfo.renderArea.extent = vSwapChainBundle.extent;
+
+        vk::ClearValue clearColor = { std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f} };
+        renderPassInfo.clearValueCount = 1;
+        renderPassInfo.pClearValues = &clearColor;
+
+        vCommandBuffer.beginRenderPass(&renderPassInfo, vk::SubpassContents::eInline);
+        vCommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, vGraphicsPipelineBundle.pipeline);
+        vCommandBuffer.draw(3, 1, 0, 0);
+        vCommandBuffer.endRenderPass();
+
+        try {
+            vCommandBuffer.end();
+        } catch (const vk::SystemError&) {
+            return;
+        }
     }
 
     structures::VSwapChainDetails Renderer::querySwapchainDetails(const vk::PhysicalDevice &vDevice, vk::SurfaceKHR &vSurface) const noexcept {
@@ -324,7 +762,7 @@ namespace tv {
         return details;
     }
 
-    vk::Instance Renderer::makeVInstance() const noexcept {
+    vk::Instance Renderer::createInstance() const noexcept {
         assert(glfwVulkanSupported());
         auto& logger = Logger::instance();
 
@@ -380,7 +818,7 @@ namespace tv {
         }
     }
 
-    void Renderer::createVSurface(GLFWwindow* window, vk::Instance& vInstance, vk::SurfaceKHR& vSurface) const noexcept {
+    void Renderer::createSurface(GLFWwindow* window, vk::Instance& vInstance, vk::SurfaceKHR& vSurface) const noexcept {
         VkSurfaceKHR surface{};
         assert(window != nullptr);
         if (glfwCreateWindowSurface(vInstance, window, nullptr, &surface) != VK_SUCCESS) {
@@ -392,7 +830,7 @@ namespace tv {
         vSurface = surface;
     }
 
-    vk::DebugUtilsMessengerEXT Renderer::makeVDebugMessenger([[maybe_unused]] vk::Instance& vInstance) const noexcept {
+    vk::DebugUtilsMessengerEXT Renderer::createDebugMessenger([[maybe_unused]] vk::Instance& vInstance) const noexcept {
 #if(TV_DEBUG_MODE)
         vk::DebugUtilsMessengerCreateInfoEXT createInfo{
             vk::DebugUtilsMessengerCreateFlagsEXT(),
@@ -412,7 +850,7 @@ namespace tv {
 #endif
     }
 
-    vk::PhysicalDevice Renderer::chooseVDevice(const vk::Instance& vInstance) const noexcept {
+    vk::PhysicalDevice Renderer::chooseDevice(const vk::Instance& vInstance) const noexcept {
         auto& logger = Logger::instance();
         const std::vector<vk::PhysicalDevice> availableDevices = vInstance.enumeratePhysicalDevices();
         if (availableDevices.empty()) {
@@ -431,7 +869,7 @@ namespace tv {
         return nullptr;
     }
 
-    vk::Device Renderer::createVLogicalDevice(vk::PhysicalDevice& vPhysicalDevice, vk::SurfaceKHR& vSurface) const noexcept {
+    vk::Device Renderer::createLogicalDevice(vk::PhysicalDevice& vPhysicalDevice, vk::SurfaceKHR& vSurface) const noexcept {
 #if(TV_DEBUG_MODE)
         Logger::instance().log(std::format("{}\n", constants::messages::VULKAN_DEVICE_CREATION_STARTED));
 #endif
@@ -485,7 +923,7 @@ namespace tv {
         return nullptr;
     }
 
-    std::vector<vk::Queue> Renderer::getVQueues(const vk::PhysicalDevice& vPhysicalDevice, vk::Device& vDevice, vk::SurfaceKHR& vSurface) const noexcept {
+    std::vector<vk::Queue> Renderer::getQueues(const vk::PhysicalDevice& vPhysicalDevice, vk::Device& vDevice, vk::SurfaceKHR& vSurface) const noexcept {
 #if(TV_DEBUG_MODE)
         Logger::instance().log(std::format("{}\n", constants::messages::VULKAN_GETTING_QUEUE_STARTED));
 #endif
