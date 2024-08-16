@@ -16,8 +16,9 @@ target_sources(
             src/logger.cpp
             src/ui/main_window.cpp
             src/render/renderer.cpp
-            src/event_loop.cpp
+            src/scene/scene.cpp
             src/services/file_service.cpp
+            src/app.cpp
 )
 
 add_compile_definitions("TV_DEBUG_MODE=$<CONFIG:Debug>")

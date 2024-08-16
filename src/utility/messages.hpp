@@ -2,7 +2,7 @@
 
 namespace tv::constants {
     struct messages {
-        // vulkan
+        // general
         inline static constexpr char VULKAN_API_VERSION[] = "Vulkan API version";
         inline static constexpr char VULKAN_EXTENSIONS[] = "Supported extensions";
         inline static constexpr char VULKAN_LAYERS[] = "Supported layers";

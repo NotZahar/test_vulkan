@@ -14,10 +14,10 @@ namespace tv::ui {
         return _window;
     }
 
-    void MainWindow::processEvents(Renderer* renderer) noexcept {
+    void MainWindow::processEvents(Renderer& renderer, Scene* scene) noexcept {
         while (!glfwWindowShouldClose(_window)) {
             glfwPollEvents();
-            renderer->render();
+            renderer.render(scene);
             calculateFrameRate();
         }
     }

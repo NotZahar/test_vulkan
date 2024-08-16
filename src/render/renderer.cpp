@@ -14,6 +14,7 @@
 #include "../utility/messages.hpp"
 #include "../utility/config.hpp"
 #include "../utility/paths.hpp"
+#include "../shaders/models/triangle.hpp"
 
 namespace tv {
     namespace {
@@ -42,10 +43,6 @@ namespace tv {
     Renderer::~Renderer() {
         _vDevice.waitIdle();
 
-        _vDevice.destroyFence(_vInFlightFence);
-        _vDevice.destroySemaphore(_vImageAvailable);
-        _vDevice.destroySemaphore(_vRenderFinished);
-
         _vDevice.destroyCommandPool(_vCommandPool);
 
         _vDevice.destroyPipeline(_vGraphicsPipelineBundle.pipeline);
@@ -55,6 +52,10 @@ namespace tv {
         std::ranges::for_each(_vSwapChainBundle.frames, [this](structures::VSwapChainFrame& frame) {
             _vDevice.destroyImageView(frame.imageView);
             _vDevice.destroyFramebuffer(frame.framebuffer);
+
+            _vDevice.destroyFence(frame.inFlight);
+            _vDevice.destroySemaphore(frame.imageAvailable);
+            _vDevice.destroySemaphore(frame.renderFinished);
         });
 
         _vDevice.destroySwapchainKHR(_vSwapChainBundle.swapChain);
@@ -74,25 +75,25 @@ namespace tv {
         });
     }
 
-    void Renderer::render() noexcept {
-        auto waitResult = _vDevice.waitForFences(1, &_vInFlightFence, VK_TRUE, UINT64_MAX);
+    void Renderer::render(Scene* scene) noexcept {
+        auto waitResult = _vDevice.waitForFences(1, &_vSwapChainBundle.frames[_vFrameNumber].inFlight, VK_TRUE, UINT64_MAX);
         if (waitResult != vk::Result::eSuccess)
             return;
 
-        auto resetResult = _vDevice.resetFences(1, &_vInFlightFence);
+        auto resetResult = _vDevice.resetFences(1, &_vSwapChainBundle.frames[_vFrameNumber].inFlight);
         if (resetResult != vk::Result::eSuccess)
             return;
 
-        uint32_t imageIndex = _vDevice.acquireNextImageKHR(_vSwapChainBundle.swapChain, UINT64_MAX, _vImageAvailable, nullptr).value;
-        vk::CommandBuffer commandBuffer = _vSwapChainBundle.frames[imageIndex].commandBuffer;
+        uint32_t imageIndex = _vDevice.acquireNextImageKHR(_vSwapChainBundle.swapChain, UINT64_MAX, _vSwapChainBundle.frames[_vFrameNumber].imageAvailable, nullptr).value;
+        vk::CommandBuffer commandBuffer = _vSwapChainBundle.frames[_vFrameNumber].commandBuffer;
 
         commandBuffer.reset();
 
-        recordDrawCommands(commandBuffer, imageIndex, _vGraphicsPipelineBundle, _vSwapChainBundle);
+        recordDrawCommands(commandBuffer, imageIndex, _vGraphicsPipelineBundle, _vSwapChainBundle, scene);
 
         vk::SubmitInfo submitInfo{};
 
-        vk::Semaphore waitSemaphores[] = { _vImageAvailable };
+        vk::Semaphore waitSemaphores[] = { _vSwapChainBundle.frames[_vFrameNumber].imageAvailable };
         vk::PipelineStageFlags waitStages[] = { vk::PipelineStageFlagBits::eColorAttachmentOutput };
         submitInfo.waitSemaphoreCount = 1;
         submitInfo.pWaitSemaphores = waitSemaphores;
@@ -101,13 +102,16 @@ namespace tv {
         submitInfo.commandBufferCount = 1;
         submitInfo.pCommandBuffers = &commandBuffer;
 
-        vk::Semaphore signalSemaphores[] = { _vRenderFinished };
+        vk::Semaphore signalSemaphores[] = { _vSwapChainBundle.frames[_vFrameNumber].renderFinished };
         submitInfo.signalSemaphoreCount = 1;
         submitInfo.pSignalSemaphores = signalSemaphores;
 
         try {
-            _vGraphicsQueue.submit(submitInfo, _vInFlightFence);
-        } catch (const vk::SystemError&) {
+            _vGraphicsQueue.submit(submitInfo, _vSwapChainBundle.frames[_vFrameNumber].inFlight);
+        } catch (const vk::SystemError& err) {
+#if(TV_DEBUG_MODE)
+            Logger::instance().log(std::format("{}\n", err.what()));
+#endif
             return;
         }
 
@@ -124,10 +128,12 @@ namespace tv {
         auto presentResult = _vPresentQueue.presentKHR(presentInfo);
         if (presentResult != vk::Result::eSuccess)
             return;
+
+        _vFrameNumber = (_vFrameNumber + 1) % _vMaxFramesInFlight;
     }
 
     void Renderer::init(GLFWwindow* window) noexcept {
-        assert(window != nullptr);
+        assert(window);
         _window = window;
 
         _vInstance = createInstance();
@@ -147,11 +153,10 @@ namespace tv {
         _vSwapChainBundle = createSwapchain(_window, _vDevice, _vPhysicalDevice, _vSurface);
         _vGraphicsPipelineBundle = createPipeline(_vDevice, _vSwapChainBundle);
 
-        finalSetup(_vDevice, _vPhysicalDevice, _vSurface, _vGraphicsPipelineBundle, _vSwapChainBundle, _vCommandPool, _vMainCommandBuffer);
+        _vMaxFramesInFlight = _vSwapChainBundle.frames.size();
+        _vFrameNumber = 0;
 
-        _vInFlightFence = createFence(_vDevice);
-        _vImageAvailable = createSemaphore(_vDevice);
-        _vRenderFinished = createSemaphore(_vDevice);
+        finalSetup(_vDevice, _vPhysicalDevice, _vSurface, _vGraphicsPipelineBundle, _vSwapChainBundle, _vCommandPool, _vMainCommandBuffer);
     }
 
     Renderer& Renderer::instance() noexcept {
@@ -317,7 +322,7 @@ namespace tv {
 
         try {
             return vDevice.createShaderModule(moduleInfo);
-        } catch (const vk::SystemError& err) {
+        } catch ([[maybe_unused]] const vk::SystemError& err) {
 #if(TV_DEBUG_MODE)
             Logger::instance().err(std::format("{}: {}\n", constants::messages::VULKAN_SHADER_MODULE_CREATION_FAILED, err.what()));
 #endif
@@ -330,13 +335,19 @@ namespace tv {
         vk::PipelineLayoutCreateInfo layoutInfo;
         layoutInfo.flags = vk::PipelineLayoutCreateFlags();
         layoutInfo.setLayoutCount = 0;
-        layoutInfo.pushConstantRangeCount = 0;
+
+        vk::PushConstantRange pushConstantRange;
+        pushConstantRange.offset = 0;
+        pushConstantRange.size = sizeof(shader::model::Triangle);
+        pushConstantRange.stageFlags = vk::ShaderStageFlagBits::eVertex;
+        layoutInfo.pPushConstantRanges = &pushConstantRange;
+        layoutInfo.pushConstantRangeCount = 1;
 
         try {
             return vDevice.createPipelineLayout(layoutInfo);
-        } catch (const vk::SystemError& err) {
+        } catch ([[maybe_unused]] const vk::SystemError& err) {
 #if(TV_DEBUG_MODE)
-            Logger::instance().err(std::format("{}\n", constants::messages::VULKAN_PIPELINE_LAYOUT_CREATION_FAILED));
+            Logger::instance().err(std::format("{}: {}\n", constants::messages::VULKAN_PIPELINE_LAYOUT_CREATION_FAILED, err.what()));
 #endif
         }
 
@@ -374,9 +385,9 @@ namespace tv {
 
         try {
             return vDevice.createRenderPass(renderpassInfo);
-        } catch (const vk::SystemError& err) {
+        } catch ([[maybe_unused]] const vk::SystemError& err) {
 #if(TV_DEBUG_MODE)
-            Logger::instance().err(std::format("{}\n", constants::messages::VULKAN_RENDERPASS_CREATION_FAILED));
+            Logger::instance().err(std::format("{}: {}\n", constants::messages::VULKAN_RENDERPASS_CREATION_FAILED, err.what()));
 #endif
         }
 
@@ -411,14 +422,14 @@ namespace tv {
         vk::Viewport viewport{};
         viewport.x = 0.0f;
         viewport.y = 0.0f;
-        viewport.width = vPipelineInBundle.swapchainExtent.width;
-        viewport.height = vPipelineInBundle.swapchainExtent.height;
+        viewport.width = static_cast<float>(vPipelineInBundle.swapchainExtent.width);
+        viewport.height = static_cast<float>(vPipelineInBundle.swapchainExtent.height);
         viewport.minDepth = 0.0f;
         viewport.maxDepth = 1.0f;
 
         vk::Rect2D scissor{};
-        scissor.offset.x = 0.0f;
-        scissor.offset.y = 0.0f;
+        scissor.offset.x = 0;
+        scissor.offset.y = 0;
         scissor.extent = vPipelineInBundle.swapchainExtent;
 
         vk::PipelineViewportStateCreateInfo viewportState = {};
@@ -448,7 +459,7 @@ namespace tv {
         fragmentShaderInfo.pName = constants::config::VULKAN_SHADER_ENTRY_POINT_NAME;
         shaderStages.push_back(fragmentShaderInfo);
 
-        pipelineInfo.stageCount = shaderStages.size();
+        pipelineInfo.stageCount = static_cast<uint32_t>(shaderStages.size());
         pipelineInfo.pStages = shaderStages.data();
 
         vk::PipelineMultisampleStateCreateInfo multisampling{};
@@ -488,9 +499,9 @@ namespace tv {
         vk::Pipeline graphicsPipeline;
         try {
             graphicsPipeline = (vPipelineInBundle.device.createGraphicsPipeline(nullptr, pipelineInfo)).value;
-        } catch (const vk::SystemError& err) {
+        } catch ([[maybe_unused]] const vk::SystemError& err) {
 #if(TV_DEBUG_MODE)
-            Logger::instance().err(std::format("{}\n", constants::messages::VULKAN_PIPELINE_CREATION_FAILED));
+            Logger::instance().err(std::format("{}: {}\n", constants::messages::VULKAN_PIPELINE_CREATION_FAILED, err.what()));
 #endif
             return {};
         }
@@ -507,15 +518,13 @@ namespace tv {
     }
 
     void Renderer::createFramebuffers(structures::VFramebufferInput& vFramebufferInput, std::vector<structures::VSwapChainFrame>& vFrames) const noexcept {
-        auto& logger = Logger::instance();
-
         for (auto& frame : vFrames) {
             std::vector<vk::ImageView> attachments = { frame.imageView };
 
             vk::FramebufferCreateInfo framebufferInfo;
             framebufferInfo.flags = vk::FramebufferCreateFlags();
             framebufferInfo.renderPass = vFramebufferInput.renderpass;
-            framebufferInfo.attachmentCount = attachments.size();
+            framebufferInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
             framebufferInfo.pAttachments = attachments.data();
             framebufferInfo.width = vFramebufferInput.swapchainExtent.width;
             framebufferInfo.height = vFramebufferInput.swapchainExtent.height;
@@ -524,20 +533,19 @@ namespace tv {
             try {
                 frame.framebuffer = vFramebufferInput.device.createFramebuffer(framebufferInfo);
 #if(TV_DEBUG_MODE)
-                logger.log(std::format("{}\n", constants::messages::VULKAN_FRAMEBUFFER_CREATED));
+                Logger::instance().log(std::format("{}\n", constants::messages::VULKAN_FRAMEBUFFER_CREATED));
 #endif
-            } catch (const vk::SystemError& err) {
+            } catch ([[maybe_unused]] const vk::SystemError& err) {
 #if(TV_DEBUG_MODE)
-                logger.err(std::format("{}\n", constants::messages::VULKAN_FRAMEBUFFER_CREATION_FAILED));
+                Logger::instance().err(std::format("{}: {}\n", constants::messages::VULKAN_FRAMEBUFFER_CREATION_FAILED, err.what()));
 #endif
             }
         }
     }
 
     vk::CommandPool Renderer::createCommandPool(vk::Device& vDevice, vk::PhysicalDevice& vPhysicalDevice, vk::SurfaceKHR& vSurface) const noexcept {
-        auto& logger = Logger::instance();
 #if(TV_DEBUG_MODE)
-        logger.log(std::format("{}\n", constants::messages::VULKAN_COMMAND_POOL_CREATION_STARTED));
+        Logger::instance().log(std::format("{}\n", constants::messages::VULKAN_COMMAND_POOL_CREATION_STARTED));
 #endif
         structures::VQueueFamilyIndices queueFamilyIndices = findQueueFamilies(vPhysicalDevice, vSurface);
 
@@ -547,9 +555,9 @@ namespace tv {
 
         try {
             return vDevice.createCommandPool(poolInfo);
-        } catch (const vk::SystemError& err) {
+        } catch ([[maybe_unused]] const vk::SystemError& err) {
 #if(TV_DEBUG_MODE)
-            logger.err(std::format("{}\n", constants::messages::VULKAN_COMMAND_POOL_CREATION_FAILED));
+            Logger::instance().err(std::format("{}: {}\n", constants::messages::VULKAN_COMMAND_POOL_CREATION_FAILED, err.what()));
 #endif
         }
 
@@ -557,8 +565,6 @@ namespace tv {
     }
 
     vk::CommandBuffer Renderer::createCommandBuffers(structures::VCommandBufferInput& vInputChunk) const noexcept {
-        auto& logger = Logger::instance();
-
         vk::CommandBufferAllocateInfo allocInfo{};
         allocInfo.commandPool = vInputChunk.commandPool;
         allocInfo.level = vk::CommandBufferLevel::ePrimary;
@@ -567,9 +573,9 @@ namespace tv {
         for (std::size_t i = 0; i < vInputChunk.frames.size(); ++i) {
             try {
                 vInputChunk.frames[i].commandBuffer = vInputChunk.device.allocateCommandBuffers(allocInfo)[0];
-            } catch (const vk::SystemError& err) {
+            } catch ([[maybe_unused]] const vk::SystemError& err) {
 #if(TV_DEBUG_MODE)
-                logger.err(std::format("{}: {}\n", constants::messages::VULKAN_COMMAND_BUFFER_ALLOCATION_FAILED, err.what()));
+                Logger::instance().err(std::format("{}: {}\n", constants::messages::VULKAN_COMMAND_BUFFER_ALLOCATION_FAILED, err.what()));
 #endif
                 return nullptr;
             }
@@ -578,9 +584,9 @@ namespace tv {
         try {
             vk::CommandBuffer commandBuffer = vInputChunk.device.allocateCommandBuffers(allocInfo)[0];
             return commandBuffer;
-        } catch (const vk::SystemError& err) {
+        } catch ([[maybe_unused]] const vk::SystemError& err) {
 #if(TV_DEBUG_MODE)
-            logger.err(std::format("{}: {}\n", constants::messages::VULKAN_MAIN_COMMAND_BUFFER_ALLOCATION_FAILED, err.what()));
+            Logger::instance().err(std::format("{}: {}\n", constants::messages::VULKAN_MAIN_COMMAND_BUFFER_ALLOCATION_FAILED, err.what()));
 #endif
         }
 
@@ -660,7 +666,7 @@ namespace tv {
             bundle.swapChain = vDevice.createSwapchainKHR(createInfo);
         } catch (const vk::SystemError& err) {
             assert(false);
-            logger.err(std::format("{}\n", constants::messages::VULKAN_SWAPCHAIN_CREATION_FAILED));
+            logger.err(std::format("{}: {}\n", constants::messages::VULKAN_SWAPCHAIN_CREATION_FAILED, err.what()));
             return bundle;
         }
 
@@ -686,7 +692,10 @@ namespace tv {
                 images[i],
                 vDevice.createImageView(imageViewCreateInfo),
                 nullptr,
-                nullptr
+                nullptr,
+                {},
+                {},
+                {}
             });
         }
 
@@ -719,14 +728,23 @@ namespace tv {
 
         structures::VCommandBufferInput commandBufferInput = { vDevice, vCommandPool, vSwapChainBundle.frames };
         vMainCommandBuffer = createCommandBuffers(commandBufferInput);
+
+        for (auto& frame : vSwapChainBundle.frames) {
+            frame.inFlight = createFence(vDevice);
+            frame.imageAvailable = createSemaphore(vDevice);
+            frame.renderFinished = createSemaphore(vDevice);
+        }
     }
 
-    void Renderer::recordDrawCommands(vk::CommandBuffer &vCommandBuffer, uint32_t imageIndex, structures::VGraphicsPipelineBundle& vGraphicsPipelineBundle, structures::VSwapChainBundle& vSwapChainBundle) const noexcept {
+    void Renderer::recordDrawCommands(vk::CommandBuffer &vCommandBuffer, uint32_t imageIndex, structures::VGraphicsPipelineBundle& vGraphicsPipelineBundle, structures::VSwapChainBundle& vSwapChainBundle, Scene* scene) const noexcept {
         vk::CommandBufferBeginInfo beginInfo{};
 
         try {
             vCommandBuffer.begin(beginInfo);
-        } catch (const vk::SystemError&) {
+        } catch ([[maybe_unused]] const vk::SystemError& err) {
+#if(TV_DEBUG_MODE)
+            Logger::instance().err(std::format("{}\n", err.what()));
+#endif
             return;
         }
 
@@ -743,12 +761,23 @@ namespace tv {
 
         vCommandBuffer.beginRenderPass(&renderPassInfo, vk::SubpassContents::eInline);
         vCommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, vGraphicsPipelineBundle.pipeline);
-        vCommandBuffer.draw(3, 1, 0, 0);
+
+        for (const auto& position : scene->getPositions()) {
+            auto model = glm::translate(glm::mat4(1.0f), position);
+            shader::model::Triangle triangle;
+            triangle.model = model;
+            vCommandBuffer.pushConstants(vGraphicsPipelineBundle.layout, vk::ShaderStageFlagBits::eVertex, 0, sizeof(triangle), &triangle);
+            vCommandBuffer.draw(3, 1, 0, 0);
+        }
+
         vCommandBuffer.endRenderPass();
 
         try {
             vCommandBuffer.end();
-        } catch (const vk::SystemError&) {
+        } catch ([[maybe_unused]] const vk::SystemError& err) {
+#if(TV_DEBUG_MODE)
+            Logger::instance().err(std::format("{}\n", err.what()));
+#endif
             return;
         }
     }
@@ -885,7 +914,7 @@ namespace tv {
         constexpr uint32_t queueCount{ 1 };
 
         std::vector<vk::DeviceQueueCreateInfo> queueCreateInfo;
-        for (uint32_t index : uniqueFamilyIndices) {
+        for (const uint32_t index : uniqueFamilyIndices) {
             queueCreateInfo.emplace_back(vk::DeviceQueueCreateInfo{
                 vk::DeviceQueueCreateFlags(),
                 index,

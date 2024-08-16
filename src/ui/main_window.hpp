@@ -5,6 +5,7 @@
 
 #include "../render/renderer.hpp"
 #include "../utility/types.hpp"
+#include "../scene/scene.hpp"
 
 namespace tv::ui {
     class MainWindow {
@@ -14,7 +15,7 @@ namespace tv::ui {
         static MainWindow& instance() noexcept;
 
         GLFWwindow* getWindow() noexcept;
-        void processEvents(Renderer* renderer) noexcept;
+        void processEvents(Renderer& renderer, Scene* scene) noexcept;
 
     private:
         MainWindow() noexcept;

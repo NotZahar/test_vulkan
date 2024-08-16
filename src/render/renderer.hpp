@@ -7,6 +7,7 @@
 
 #include "../utility/types.hpp"
 #include "../utility/structures.hpp"
+#include "../scene/scene.hpp"
 
 namespace tv {
     class Renderer {
@@ -15,7 +16,7 @@ namespace tv {
 
         static Renderer& instance() noexcept;
         static void setup(Renderer& renderer, GLFWwindow* window) noexcept;
-        void render() noexcept;
+        void render(Scene* scene) noexcept;
 
     private:
         Renderer() noexcept;
@@ -52,7 +53,7 @@ namespace tv {
         [[nodiscard]] vk::CommandBuffer createCommandBuffers(structures::VCommandBufferInput& vInputChunk) const noexcept;
         [[nodiscard]] vk::Semaphore createSemaphore(vk::Device& vDevice) const noexcept;
         [[nodiscard]] vk::Fence createFence(vk::Device& vDevice) const noexcept;
-        void recordDrawCommands(vk::CommandBuffer& vCommandBuffer, uint32_t imageIndex, structures::VGraphicsPipelineBundle& vGraphicsPipelineBundle, structures::VSwapChainBundle& vSwapChainBundle) const noexcept;
+        void recordDrawCommands(vk::CommandBuffer& vCommandBuffer, uint32_t imageIndex, structures::VGraphicsPipelineBundle& vGraphicsPipelineBundle, structures::VSwapChainBundle& vSwapChainBundle, Scene* scene) const noexcept;
 
         GLFWwindow* _window;
         vk::Instance _vInstance;
@@ -67,8 +68,7 @@ namespace tv {
         structures::VGraphicsPipelineBundle _vGraphicsPipelineBundle;
         vk::CommandPool _vCommandPool;
         vk::CommandBuffer _vMainCommandBuffer;
-        vk::Fence _vInFlightFence;
-        vk::Semaphore _vImageAvailable;
-        vk::Semaphore _vRenderFinished;
+        std::size_t _vMaxFramesInFlight;
+        std::size_t _vFrameNumber;
     };
 }
