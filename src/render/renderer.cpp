@@ -49,16 +49,7 @@ namespace tv {
         _vDevice.destroyPipelineLayout(_vGraphicsPipelineBundle.layout);
         _vDevice.destroyRenderPass(_vGraphicsPipelineBundle.renderpass);
 
-        std::ranges::for_each(_vSwapChainBundle.frames, [this](structures::VSwapChainFrame& frame) {
-            _vDevice.destroyImageView(frame.imageView);
-            _vDevice.destroyFramebuffer(frame.framebuffer);
-
-            _vDevice.destroyFence(frame.inFlight);
-            _vDevice.destroySemaphore(frame.imageAvailable);
-            _vDevice.destroySemaphore(frame.renderFinished);
-        });
-
-        _vDevice.destroySwapchainKHR(_vSwapChainBundle.swapChain);
+        resetSwapchain();
         _vDevice.destroy();
 
         _vInstance.destroySurfaceKHR(_vSurface);
@@ -84,7 +75,13 @@ namespace tv {
         if (resetResult != vk::Result::eSuccess)
             return;
 
-        uint32_t imageIndex = _vDevice.acquireNextImageKHR(_vSwapChainBundle.swapChain, UINT64_MAX, _vSwapChainBundle.frames[_vFrameNumber].imageAvailable, nullptr).value;
+        vk::ResultValue acquireResult = _vDevice.acquireNextImageKHR(_vSwapChainBundle.swapChain, UINT64_MAX, _vSwapChainBundle.frames[_vFrameNumber].imageAvailable, nullptr);
+        if (acquireResult.result == vk::Result::eErrorOutOfDateKHR) {
+            recreateSwapchain();
+            return;
+        }
+
+        uint32_t imageIndex = acquireResult.value;
         vk::CommandBuffer commandBuffer = _vSwapChainBundle.frames[_vFrameNumber].commandBuffer;
 
         commandBuffer.reset();
@@ -125,9 +122,20 @@ namespace tv {
 
         presentInfo.pImageIndices = &imageIndex;
 
-        auto presentResult = _vPresentQueue.presentKHR(presentInfo);
-        if (presentResult != vk::Result::eSuccess)
+        vk::Result presentResult;
+        try {
+            presentResult = _vPresentQueue.presentKHR(presentInfo);
+        } catch ([[maybe_unused]] const vk::OutOfDateKHRError& err) {
+#if(TV_DEBUG_MODE)
+            Logger::instance().log(std::format("{}\n", err.what()));
+#endif
+            presentResult = vk::Result::eErrorOutOfDateKHR;
+        }
+
+        if (presentResult == vk::Result::eErrorOutOfDateKHR || presentResult == vk::Result::eSuboptimalKHR) {
+            recreateSwapchain();
             return;
+        }
 
         _vFrameNumber = (_vFrameNumber + 1) % _vMaxFramesInFlight;
     }
@@ -150,10 +158,9 @@ namespace tv {
         _vGraphicsQueue = vQueues[0];
         _vPresentQueue = vQueues[1];
 
-        _vSwapChainBundle = createSwapchain(_window, _vDevice, _vPhysicalDevice, _vSurface);
+        _vSwapChainBundle = createSwapchain(_window, _vDevice, _vPhysicalDevice, _vSurface, _vMaxFramesInFlight);
         _vGraphicsPipelineBundle = createPipeline(_vDevice, _vSwapChainBundle);
 
-        _vMaxFramesInFlight = _vSwapChainBundle.frames.size();
         _vFrameNumber = 0;
 
         finalSetup(_vDevice, _vPhysicalDevice, _vSurface, _vGraphicsPipelineBundle, _vSwapChainBundle, _vCommandPool, _vMainCommandBuffer);
@@ -517,21 +524,26 @@ namespace tv {
         return pipelineBundle;
     }
 
-    void Renderer::createFramebuffers(structures::VFramebufferInput& vFramebufferInput, std::vector<structures::VSwapChainFrame>& vFrames) const noexcept {
-        for (auto& frame : vFrames) {
+    void Renderer::createFramebuffers(vk::Device& vDevice, structures::VGraphicsPipelineBundle& vGraphicsPipelineBundle, structures::VSwapChainBundle& vSwapChainBundle) const noexcept {
+        structures::VFramebufferInput frameBufferInput;
+        frameBufferInput.device = vDevice;
+        frameBufferInput.renderpass = vGraphicsPipelineBundle.renderpass;
+        frameBufferInput.swapchainExtent = vSwapChainBundle.extent;
+
+        for (auto& frame : vSwapChainBundle.frames) {
             std::vector<vk::ImageView> attachments = { frame.imageView };
 
             vk::FramebufferCreateInfo framebufferInfo;
             framebufferInfo.flags = vk::FramebufferCreateFlags();
-            framebufferInfo.renderPass = vFramebufferInput.renderpass;
+            framebufferInfo.renderPass = frameBufferInput.renderpass;
             framebufferInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
             framebufferInfo.pAttachments = attachments.data();
-            framebufferInfo.width = vFramebufferInput.swapchainExtent.width;
-            framebufferInfo.height = vFramebufferInput.swapchainExtent.height;
+            framebufferInfo.width = frameBufferInput.swapchainExtent.width;
+            framebufferInfo.height = frameBufferInput.swapchainExtent.height;
             framebufferInfo.layers = 1;
 
             try {
-                frame.framebuffer = vFramebufferInput.device.createFramebuffer(framebufferInfo);
+                frame.framebuffer = frameBufferInput.device.createFramebuffer(framebufferInfo);
 #if(TV_DEBUG_MODE)
                 Logger::instance().log(std::format("{}\n", constants::messages::VULKAN_FRAMEBUFFER_CREATED));
 #endif
@@ -564,7 +576,7 @@ namespace tv {
         return nullptr;
     }
 
-    vk::CommandBuffer Renderer::createCommandBuffers(structures::VCommandBufferInput& vInputChunk) const noexcept {
+    void Renderer::createFrameCommandBuffers(structures::VCommandBufferInput& vInputChunk) const noexcept {
         vk::CommandBufferAllocateInfo allocInfo{};
         allocInfo.commandPool = vInputChunk.commandPool;
         allocInfo.level = vk::CommandBufferLevel::ePrimary;
@@ -577,13 +589,19 @@ namespace tv {
 #if(TV_DEBUG_MODE)
                 Logger::instance().err(std::format("{}: {}\n", constants::messages::VULKAN_COMMAND_BUFFER_ALLOCATION_FAILED, err.what()));
 #endif
-                return nullptr;
+                return;
             }
         }
+    }
+
+    [[nodiscard]] vk::CommandBuffer Renderer::createCommandBuffer(structures::VCommandBufferInput& vInputChunk) const noexcept {
+        vk::CommandBufferAllocateInfo allocInfo{};
+        allocInfo.commandPool = vInputChunk.commandPool;
+        allocInfo.level = vk::CommandBufferLevel::ePrimary;
+        allocInfo.commandBufferCount = 1;
 
         try {
-            vk::CommandBuffer commandBuffer = vInputChunk.device.allocateCommandBuffers(allocInfo)[0];
-            return commandBuffer;
+            return vInputChunk.device.allocateCommandBuffers(allocInfo)[0];
         } catch ([[maybe_unused]] const vk::SystemError& err) {
 #if(TV_DEBUG_MODE)
             Logger::instance().err(std::format("{}: {}\n", constants::messages::VULKAN_MAIN_COMMAND_BUFFER_ALLOCATION_FAILED, err.what()));
@@ -615,10 +633,9 @@ namespace tv {
         }
     }
 
-    structures::VSwapChainBundle Renderer::createSwapchain(GLFWwindow* window, vk::Device& vDevice, vk::PhysicalDevice& vPhysicalDevice, vk::SurfaceKHR& vSurface) const noexcept {
-        auto& logger = Logger::instance();
+    structures::VSwapChainBundle Renderer::createSwapchain(GLFWwindow* window, vk::Device& vDevice, vk::PhysicalDevice& vPhysicalDevice, vk::SurfaceKHR& vSurface, std::size_t& vMaxFramesInFlight) const noexcept {
 #if(TV_DEBUG_MODE)
-        logger.log(std::format("{}\n", constants::messages::VULKAN_SWAPCHAIN_CREATION_STARTED));
+        Logger::instance().log(std::format("{}\n", constants::messages::VULKAN_SWAPCHAIN_CREATION_STARTED));
 #endif
         structures::VSwapChainDetails details = querySwapchainDetails(vPhysicalDevice, vSurface);
         vk::SurfaceFormatKHR format = chooseSwapchainSurfaceFormat(details.formats);
@@ -666,7 +683,7 @@ namespace tv {
             bundle.swapChain = vDevice.createSwapchainKHR(createInfo);
         } catch (const vk::SystemError& err) {
             assert(false);
-            logger.err(std::format("{}: {}\n", constants::messages::VULKAN_SWAPCHAIN_CREATION_FAILED, err.what()));
+            Logger::instance().err(std::format("{}: {}\n", constants::messages::VULKAN_SWAPCHAIN_CREATION_FAILED, err.what()));
             return bundle;
         }
 
@@ -702,7 +719,22 @@ namespace tv {
         bundle.format = format.format;
         bundle.extent = extent;
 
+        vMaxFramesInFlight = bundle.frames.size();
+
         return bundle;
+    }
+
+    void Renderer::resetSwapchain() noexcept {
+        std::ranges::for_each(_vSwapChainBundle.frames, [this](structures::VSwapChainFrame& frame) {
+            _vDevice.destroyImageView(frame.imageView);
+            _vDevice.destroyFramebuffer(frame.framebuffer);
+
+            _vDevice.destroyFence(frame.inFlight);
+            _vDevice.destroySemaphore(frame.imageAvailable);
+            _vDevice.destroySemaphore(frame.renderFinished);
+        });
+
+        _vDevice.destroySwapchainKHR(_vSwapChainBundle.swapChain);
     }
 
     structures::VGraphicsPipelineBundle Renderer::createPipeline(vk::Device& vDevice, structures::VSwapChainBundle& vSwapchainBundle) const noexcept {
@@ -718,22 +750,35 @@ namespace tv {
     }
 
     void Renderer::finalSetup(vk::Device& vDevice, vk::PhysicalDevice& vPhysicalDevice, vk::SurfaceKHR vSurface, structures::VGraphicsPipelineBundle& vGraphicsPipelineBundle, structures::VSwapChainBundle& vSwapChainBundle, vk::CommandPool& vCommandPool, vk::CommandBuffer vMainCommandBuffer) const noexcept {
-        structures::VFramebufferInput frameBufferInput;
-        frameBufferInput.device = vDevice;
-        frameBufferInput.renderpass = vGraphicsPipelineBundle.renderpass;
-        frameBufferInput.swapchainExtent = vSwapChainBundle.extent;
+        createFramebuffers(vDevice, vGraphicsPipelineBundle, vSwapChainBundle);
 
-        createFramebuffers(frameBufferInput, vSwapChainBundle.frames);
         vCommandPool = createCommandPool(vDevice, vPhysicalDevice, vSurface);
 
         structures::VCommandBufferInput commandBufferInput = { vDevice, vCommandPool, vSwapChainBundle.frames };
-        vMainCommandBuffer = createCommandBuffers(commandBufferInput);
+        vMainCommandBuffer = createCommandBuffer(commandBufferInput);
+        createFrameCommandBuffers(commandBufferInput);
 
-        for (auto& frame : vSwapChainBundle.frames) {
-            frame.inFlight = createFence(vDevice);
-            frame.imageAvailable = createSemaphore(vDevice);
-            frame.renderFinished = createSemaphore(vDevice);
+        createFrameSyncObjects(vDevice, vSwapChainBundle);
+    }
+
+    void Renderer::recreateSwapchain() noexcept {
+        int windowWidth = 0;
+        int windowHeight = 0;
+        while (windowWidth == 0 || windowHeight == 0) {
+            glfwGetFramebufferSize(_window, &windowWidth, &windowHeight);
+            glfwWaitEvents();
         }
+
+        _vDevice.waitIdle();
+
+        resetSwapchain();
+
+        _vSwapChainBundle = createSwapchain(_window, _vDevice, _vPhysicalDevice, _vSurface, _vMaxFramesInFlight);
+        createFramebuffers(_vDevice, _vGraphicsPipelineBundle, _vSwapChainBundle);
+        createFrameSyncObjects(_vDevice, _vSwapChainBundle);
+
+        structures::VCommandBufferInput commandBufferInput = { _vDevice, _vCommandPool, _vSwapChainBundle.frames };
+        createFrameCommandBuffers(commandBufferInput);
     }
 
     void Renderer::recordDrawCommands(vk::CommandBuffer &vCommandBuffer, uint32_t imageIndex, structures::VGraphicsPipelineBundle& vGraphicsPipelineBundle, structures::VSwapChainBundle& vSwapChainBundle, Scene* scene) const noexcept {
@@ -779,6 +824,14 @@ namespace tv {
             Logger::instance().err(std::format("{}\n", err.what()));
 #endif
             return;
+        }
+    }
+
+    void Renderer::createFrameSyncObjects(vk::Device& vDevice, structures::VSwapChainBundle& vSwapChainBundle) const noexcept {
+        for (auto& frame : vSwapChainBundle.frames) {
+            frame.inFlight = createFence(vDevice);
+            frame.imageAvailable = createSemaphore(vDevice);
+            frame.renderFinished = createSemaphore(vDevice);
         }
     }
 
@@ -880,16 +933,15 @@ namespace tv {
     }
 
     vk::PhysicalDevice Renderer::chooseDevice(const vk::Instance& vInstance) const noexcept {
-        auto& logger = Logger::instance();
         const std::vector<vk::PhysicalDevice> availableDevices = vInstance.enumeratePhysicalDevices();
         if (availableDevices.empty()) {
-            logger.err(std::format("{}\n", constants::messages::VULKAN_NO_AVAILABLE_DEVICE));
+            Logger::instance().err(std::format("{}\n", constants::messages::VULKAN_NO_AVAILABLE_DEVICE));
             return nullptr;
         }
 
         for (const vk::PhysicalDevice& device : availableDevices) {
 #if(TV_DEBUG_MODE)
-            logger.log(std::format("{}: {}\n", constants::messages::VULKAN_DEVICE_NAME, device.getProperties().deviceName.data()));
+            Logger::instance().log(std::format("{}: {}\n", constants::messages::VULKAN_DEVICE_NAME, device.getProperties().deviceName.data()));
 #endif
             if (deviceIsSuitable(device))
                 return device;

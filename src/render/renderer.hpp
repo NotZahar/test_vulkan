@@ -31,9 +31,11 @@ namespace tv {
         [[nodiscard]] vk::PhysicalDevice chooseDevice(const vk::Instance& vInstance) const noexcept;
         [[nodiscard]] vk::Device createLogicalDevice(vk::PhysicalDevice& vPhysicalDevice, vk::SurfaceKHR& vSurface) const noexcept;
         [[nodiscard]] std::vector<vk::Queue> getQueues(const vk::PhysicalDevice& vPhysicalDevice, vk::Device& vDevice, vk::SurfaceKHR& vSurface) const noexcept;
-        [[nodiscard]] structures::VSwapChainBundle createSwapchain(GLFWwindow* window, vk::Device& vDevice, vk::PhysicalDevice& vPhysicalDevice, vk::SurfaceKHR& vSurface) const noexcept;
+        [[nodiscard]] structures::VSwapChainBundle createSwapchain(GLFWwindow* window, vk::Device& vDevice, vk::PhysicalDevice& vPhysicalDevice, vk::SurfaceKHR& vSurface, std::size_t& vMaxFramesInFlight) const noexcept;
+        void resetSwapchain() noexcept;
         [[nodiscard]] structures::VGraphicsPipelineBundle createPipeline(vk::Device& vDevice, structures::VSwapChainBundle& vSwapchainBundle) const noexcept;
         void finalSetup(vk::Device& vDevice, vk::PhysicalDevice& vPhysicalDevice, vk::SurfaceKHR vSurface, structures::VGraphicsPipelineBundle& vGraphicsPipelineBundle, structures::VSwapChainBundle& vSwapChainBundle, vk::CommandPool& vCommandPool, vk::CommandBuffer vMainCommandBuffer) const noexcept;
+        void recreateSwapchain() noexcept;
 
         void printAdditionalInfo(const uint32_t vulkanVersion, const std::vector<const char*>& glfwExtensions) const noexcept;
         [[nodiscard]] bool deviceIsSuitable(const vk::PhysicalDevice& vDevice) const noexcept;
@@ -48,12 +50,14 @@ namespace tv {
         [[nodiscard]] vk::PipelineLayout createPipelineLayout(vk::Device& vDevice) const noexcept;
         [[nodiscard]] vk::RenderPass createRenderpass(vk::Device& vDevice, vk::Format vSwapchainImageFormat) const noexcept;
         [[nodiscard]] structures::VGraphicsPipelineBundle createGraphicsPipeline(structures::VGraphicsPipelineInBundle& vPipelineInBundle) const noexcept;
-        void createFramebuffers(structures::VFramebufferInput& vFramebufferInput, std::vector<structures::VSwapChainFrame>& vFrames) const noexcept;
+        void createFramebuffers(vk::Device& vDevice, structures::VGraphicsPipelineBundle& vGraphicsPipelineBundle, structures::VSwapChainBundle& vSwapChainBundle) const noexcept;
         [[nodiscard]] vk::CommandPool createCommandPool(vk::Device& vDevice, vk::PhysicalDevice& vPhysicalDevice, vk::SurfaceKHR& vSurface) const noexcept;
-        [[nodiscard]] vk::CommandBuffer createCommandBuffers(structures::VCommandBufferInput& vInputChunk) const noexcept;
+        void createFrameCommandBuffers(structures::VCommandBufferInput& vInputChunk) const noexcept;
+        [[nodiscard]] vk::CommandBuffer createCommandBuffer(structures::VCommandBufferInput& vInputChunk) const noexcept;
         [[nodiscard]] vk::Semaphore createSemaphore(vk::Device& vDevice) const noexcept;
         [[nodiscard]] vk::Fence createFence(vk::Device& vDevice) const noexcept;
         void recordDrawCommands(vk::CommandBuffer& vCommandBuffer, uint32_t imageIndex, structures::VGraphicsPipelineBundle& vGraphicsPipelineBundle, structures::VSwapChainBundle& vSwapChainBundle, Scene* scene) const noexcept;
+        void createFrameSyncObjects(vk::Device& vDevice, structures::VSwapChainBundle& vSwapChainBundle) const noexcept;
 
         GLFWwindow* _window;
         vk::Instance _vInstance;

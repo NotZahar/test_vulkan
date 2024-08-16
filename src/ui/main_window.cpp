@@ -1,7 +1,5 @@
 #include "main_window.hpp"
 
-#include <sstream>
-
 #include "../utility/config.hpp"
 
 namespace tv::ui {
@@ -26,7 +24,7 @@ namespace tv::ui {
         glfwInit();
 
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-        glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+        glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
         _window = glfwCreateWindow(
             constants::config::WINDOW_MAIN_WIDTH,
@@ -51,9 +49,7 @@ namespace tv::ui {
         if (delta >= 1) {
             assert(delta != 0);
             const int frameRate = std::max(1, numberOfFrames / (int)delta);
-            std::stringstream title;
-            title << std::format("{} in {} fps", constants::config::WINDOW_TITLE, frameRate);
-            glfwSetWindowTitle(_window, title.str().c_str());
+            glfwSetWindowTitle(_window, std::format("{} in {} fps", constants::config::WINDOW_TITLE, frameRate).c_str());
             lastTime = currentTime;
             numberOfFrames = -1;
         }
