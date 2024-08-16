@@ -18,7 +18,7 @@ namespace tv::ui {
         while (!glfwWindowShouldClose(_window)) {
             glfwPollEvents();
             renderer.render(scene);
-            calculateFrameRate();
+            drawFrameRate();
         }
     }
 
@@ -42,21 +42,23 @@ namespace tv::ui {
         glfwTerminate();
     }
 
-    void MainWindow::calculateFrameRate() noexcept {
-        _currentTime = glfwGetTime();
-        double delta = _currentTime - _lastTime;
+    void MainWindow::drawFrameRate() noexcept {
+        static int numberOfFrames = 0;
+        static double lastTime = 0;
+        const double currentTime = glfwGetTime();
+        const double delta = currentTime - lastTime;
 
         if (delta >= 1) {
-            int framerate{ std::max(1, int(_numFrames / delta)) };
+            assert(delta != 0);
+            const int frameRate = std::max(1, numberOfFrames / (int)delta);
             std::stringstream title;
-            title << constants::config::WINDOW_TITLE << " " << framerate << " fps";
+            title << std::format("{} in {} fps", constants::config::WINDOW_TITLE, frameRate);
             glfwSetWindowTitle(_window, title.str().c_str());
-            _lastTime = _currentTime;
-            _numFrames = -1;
-            _frameTime = float(1000.0 / framerate);
+            lastTime = currentTime;
+            numberOfFrames = -1;
         }
 
-        ++_numFrames;
+        ++numberOfFrames;
     }
 }
 

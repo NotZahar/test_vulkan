@@ -22,12 +22,8 @@ namespace tv::ui {
 
         ~MainWindow();
 
-        void calculateFrameRate() noexcept;
+        void drawFrameRate() noexcept;
 
         GLFWwindow* _window;
-        double _lastTime;
-        double _currentTime;
-        int _numFrames;
-        float _frameTime;
     };
 }
